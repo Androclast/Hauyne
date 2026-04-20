@@ -9,6 +9,7 @@ const t = @import("types/common.zig");
 const win = @import("types/windows.zig");
 const lin = @import("types/linux.zig");
 const p = @import("paths.zig");
+const rc_mod = @import("runtimeconfig.zig");
 
 var hostfxr_init: ?t.HostfxrInitFn = null;
 var hostfxr_get_delegate: ?t.HostfxrGetDelegateFn = null;
@@ -75,28 +76,26 @@ fn loadPayload(param: ?*anyopaque) void {
         "hauyne.log";
 
     var assembly_path: ?[*:0]const t.CharT = null;
-    var config_path: ?[*:0]const t.CharT = null;
 
     if (param != null) {
         assembly_path = p.copyToBufferCharT(&assembly_buf, source);
-        const stem = if (p.endsWithCharT(source, ".dll")) source.len - 4 else source.len;
-        @memcpy(config_buf[0..stem], source[0..stem]);
-        config_path = p.appendAsciiCharT(&config_buf, stem, ".runtimeconfig.json");
     } else if (p.parentDirCharT(source)) |parent| {
         assembly_path = p.joinAsciiCharT(&assembly_buf, parent, sep, "Hauyne.Payload.dll");
-        config_path = p.joinAsciiCharT(&config_buf, parent, sep, "Hauyne.Payload.runtimeconfig.json");
     }
 
-    if (assembly_path == null or config_path == null) {
-        p.appendLog(log_path_u8, "hauyne: failed to determine paths");
+    if (assembly_path == null) {
+        p.appendLog(log_path_u8, "hauyne: failed to determine payload path");
         return;
     }
 
+    const config_path = rc_mod.synthesize(&config_buf) orelse {
+        p.appendLog(log_path_u8, "hauyne: synthesize runtimeconfig failed");
+        return;
+    };
+    defer rc_mod.unlink(config_path);
+
     var ctx: t.HostfxrHandle = null;
     var rc = hostfxr_init.?(config_path, null, &ctx);
-    // Retry with null config on HostApiMissingProperty (missing runtimeconfig).
-    if (rc == @as(i32, @bitCast(@as(u32, 0x80008093))) or ctx == null)
-        rc = hostfxr_init.?(null, null, &ctx);
     if (ctx == null) {
         p.appendLog(log_path_u8, "hauyne: ctx is null");
         return;

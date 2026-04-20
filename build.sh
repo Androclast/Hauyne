@@ -2,8 +2,8 @@
 #
 # Usage:
 #   ./build.sh                                # build everything, Release/ReleaseFast
-#   ./build.sh --no-zig                       # skip bootstrap build
-#   ./build.sh --no-dotnet                    # skip .NET build
+#   ./build.sh --no-zig                       # skip bootstrap + injector build
+#   ./build.sh --no-dotnet                    # skip Payload build
 #   ./build.sh --zig-targets "x86_64-linux-gnu x86_64-windows-gnu"
 #   CONFIG=Debug OPTIMIZE=Debug ./build.sh    # debug build both sides
 
@@ -13,8 +13,9 @@ cd "$(dirname "$(readlink -f "$0")")"
 
 REPO_ROOT="$PWD"
 BOOTSTRAP_DIR="$REPO_ROOT/Hauyne.Bootstrap"
+INJECTOR_DIR="$REPO_ROOT/Hauyne.Injector"
+PAYLOAD_CSPROJ="$REPO_ROOT/Hauyne.Payload/Hauyne.Payload.csproj"
 BIN_DIR="$REPO_ROOT/bin"
-SOLUTION="$REPO_ROOT/Hauyne.sln"
 
 CONFIG="${CONFIG:-Release}"
 OPTIMIZE="${OPTIMIZE:-ReleaseFast}"
@@ -56,44 +57,79 @@ missing=0
 echo "  CONFIG=$CONFIG   OPTIMIZE=$OPTIMIZE"
 (( DO_ZIG )) && echo "  ZIG_TARGETS=${ZIG_TARGETS[*]}"
 
-artifact_for() {
+bootstrap_artifact_for() {
     case "$1" in
         *windows*) echo "Hauyne.Bootstrap.dll" ;;
         *)         echo "libHauyne.Bootstrap.so" ;;
     esac
 }
 
+injector_artifact_for() {
+    case "$1" in
+        *windows*) echo "Hauyne.Injector.exe" ;;
+        *)         echo "Hauyne.Injector" ;;
+    esac
+}
+
 build_zig() {
     mkdir -p "$BIN_DIR"
     rm -f "$BIN_DIR/libHauyne.Bootstrap.so" "$BIN_DIR/Hauyne.Bootstrap.dll"
+    rm -f "$BIN_DIR/Hauyne.Injector" "$BIN_DIR/Hauyne.Injector.exe"
+
     for target in "${ZIG_TARGETS[@]}"; do
-        echo "==> zig $target ($OPTIMIZE)"
+        echo "==> zig bootstrap $target ($OPTIMIZE)"
         ( cd "$BOOTSTRAP_DIR" && zig build -Dtarget="$target" -Doptimize="$OPTIMIZE" )
 
-        local artifact dest_dir
-        artifact="$(artifact_for "$target")"
+        echo "==> zig injector $target ($OPTIMIZE)"
+        ( cd "$INJECTOR_DIR" && zig build -Dtarget="$target" -Doptimize="$OPTIMIZE" )
+
+        local dest_dir
         dest_dir="$BIN_DIR/$target"
         mkdir -p "$dest_dir"
-        mv "$BIN_DIR/$artifact" "$dest_dir/$artifact"
+
+        local bs_artifact inj_artifact
+        bs_artifact="$(bootstrap_artifact_for "$target")"
+        inj_artifact="$(injector_artifact_for "$target")"
+
+        mv "$BIN_DIR/$bs_artifact"  "$dest_dir/$bs_artifact"
+        mv "$BIN_DIR/$inj_artifact" "$dest_dir/$inj_artifact"
     done
 
     link_canonical() {
-        local target="$1" artifact
+        local target="$1"
         [[ " ${ZIG_TARGETS[*]} " == *" $target "* ]] || return 0
-        artifact="$(artifact_for "$target")"
-        ln -sfn "$target/$artifact" "$BIN_DIR/$artifact"
+
+        local bs_artifact inj_artifact
+        bs_artifact="$(bootstrap_artifact_for "$target")"
+        inj_artifact="$(injector_artifact_for "$target")"
+
+        ln -sfn "$target/$bs_artifact"  "$BIN_DIR/$bs_artifact"
+        ln -sfn "$target/$inj_artifact" "$BIN_DIR/$inj_artifact"
     }
     link_canonical x86_64-linux-gnu
     link_canonical x86_64-windows-gnu
 }
 
 build_dotnet() {
-    echo "==> dotnet build $SOLUTION ($CONFIG)"
-    dotnet build "$SOLUTION" -c "$CONFIG" --nologo
+    echo "==> dotnet build Hauyne.Payload ($CONFIG)"
+    dotnet build "$PAYLOAD_CSPROJ" -c "$CONFIG" --nologo
+}
+
+# Bootstrap resolves Hauyne.Payload.dll relative to its own .so directory (dladdr),
+# so symlink the payload into each per-target subdir.
+payload() {
+    (( DO_ZIG )) || return 0
+    for target in "${ZIG_TARGETS[@]}"; do
+        local dest="$BIN_DIR/$target"
+        [[ -d "$dest" ]] || continue
+        [[ -f "$BIN_DIR/Hauyne.Payload.dll" ]] || continue
+        ln -sfn "../Hauyne.Payload.dll" "$dest/Hauyne.Payload.dll"
+    done
 }
 
 (( DO_ZIG ))    && build_zig
 (( DO_DOTNET )) && build_dotnet
+payload
 
 find "$BIN_DIR" -maxdepth 2 -type f \
     \( -name '*.dll' -o -name '*.so' -o -name 'Hauyne.Injector' -o -name '*.exe' \) \

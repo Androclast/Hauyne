@@ -6,9 +6,15 @@ Targets running .NET 5+ processes via hostfxr, injects into the default Assembly
 
 ## Building
 
-Just click the "Build solution" button it will solve itself.
+Run `./build.sh`.
+
+Knobs:
+* `./build.sh --no-zig` / `--no-dotnet` to skip a side
+* `./build.sh --zig-targets "x86_64-linux-gnu x86_64-windows-gnu"` to narrow targets
+* `CONFIG=Debug OPTIMIZE=Debug ./build.sh` for debug builds
 
 ## Requirements
 * Matching .NET version with target (Targets .NET 9 out of the box)
 * Matching arch with target
-* MSVC toolchain for the C++ project
+* Zig 
+* .NET SDK
