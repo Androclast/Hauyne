@@ -30,6 +30,12 @@ if (!File.Exists(bootstrapPath))
     return 1;
 }
 
+if (!IsDotNetProcess(targetProcess))
+{
+    Console.WriteLine($"{targetProcess.ProcessName} ({targetProcess.Id}) does not look like a .NET process (hostfxr not loaded)");
+    return 1;
+}
+
 if (OperatingSystem.IsWindows())
     Injector.Inject(targetProcess, bootstrapPath);
 else if (OperatingSystem.IsLinux())
@@ -39,6 +45,25 @@ else
 
 Console.WriteLine($"Injected into {targetProcess.ProcessName} ({targetProcess.Id})");
 return 0;
+
+static bool IsDotNetProcess(Process process)
+{
+    if (OperatingSystem.IsWindows())
+    {
+        foreach (ProcessModule module in process.Modules)
+            if (string.Equals(module.ModuleName, "hostfxr.dll", StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+    if (OperatingSystem.IsLinux())
+    {
+        foreach (var line in File.ReadLines($"/proc/{process.Id}/maps"))
+            if (line.Contains("/libhostfxr.so"))
+                return true;
+        return false;
+    }
+    return false;
+}
 
 static partial class Injector
 {
@@ -60,21 +85,38 @@ static partial class Injector
                 AllocationType.Commit | AllocationType.Reserve, MemoryProtection.ReadWrite);
 
             if (allocated == nint.Zero)
-                throw new InvalidOperationException("VirtualAllocEx failed");
+                throw new InvalidOperationException($"VirtualAllocEx failed: {Marshal.GetLastWin32Error()}");
 
-            if (!WriteProcessMemory(hProcess, allocated, pathBytes, (uint)pathBytes.Length, out _))
-                throw new InvalidOperationException("WriteProcessMemory failed");
+            try
+            {
+                if (!WriteProcessMemory(hProcess, allocated, pathBytes, (uint)pathBytes.Length, out _))
+                    throw new InvalidOperationException($"WriteProcessMemory failed: {Marshal.GetLastWin32Error()}");
 
-            var kernel32 = GetModuleHandle("kernel32.dll");
-            var loadLibrary = GetProcAddress(kernel32, "LoadLibraryW");
+                var kernel32 = GetModuleHandle("kernel32.dll");
+                if (kernel32 == nint.Zero)
+                    throw new InvalidOperationException($"GetModuleHandle(kernel32) failed: {Marshal.GetLastWin32Error()}");
 
-            var thread = CreateRemoteThread(hProcess, nint.Zero, 0, loadLibrary, allocated, 0, out _);
-            if (thread == nint.Zero)
-                throw new InvalidOperationException($"CreateRemoteThread failed: {Marshal.GetLastWin32Error()}");
+                var loadLibrary = GetProcAddress(kernel32, "LoadLibraryW");
+                if (loadLibrary == nint.Zero)
+                    throw new InvalidOperationException($"GetProcAddress(LoadLibraryW) failed: {Marshal.GetLastWin32Error()}");
 
-            WaitForSingleObject(thread, 5000);
-            CloseHandle(thread);
-            VirtualFreeEx(hProcess, allocated, 0, FreeType.Release);
+                var thread = CreateRemoteThread(hProcess, nint.Zero, 0, loadLibrary, allocated, 0, out _);
+                if (thread == nint.Zero)
+                    throw new InvalidOperationException($"CreateRemoteThread failed: {Marshal.GetLastWin32Error()}");
+
+                try
+                {
+                    WaitForSingleObject(thread, 5000);
+                }
+                finally
+                {
+                    CloseHandle(thread);
+                }
+            }
+            finally
+            {
+                VirtualFreeEx(hProcess, allocated, 0, FreeType.Release);
+            }
         }
         finally
         {
