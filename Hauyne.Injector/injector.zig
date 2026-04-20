@@ -64,7 +64,7 @@ pub fn main() u8 {
             return 1;
         };
     } else if (builtin.os.tag == .linux) {
-        const linux = @import("linux.zig");
+        const linux = @import("linux/linux.zig");
         linux.inject(allocator, @intCast(pid), bootstrap_path) catch |err| {
             std.debug.print("Injection failed: {}\n", .{err});
             return 1;
