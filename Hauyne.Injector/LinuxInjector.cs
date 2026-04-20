@@ -16,6 +16,8 @@ using System.Text;
 [SupportedOSPlatform("linux")]
 static partial class LinuxInjector
 {
+    static readonly bool Debug = Environment.GetEnvironmentVariable("HAUYNE_DEBUG") == "1";
+
     const int PTRACE_PEEKDATA = 2;
     const int PTRACE_POKEDATA = 5;
     const int PTRACE_CONT = 7;
@@ -42,15 +44,19 @@ static partial class LinuxInjector
 
     public static void Inject(Process process, string soPath)
     {
+        if (RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            throw new PlatformNotSupportedException("Linux injection requires x86-64");
+
         int pid = process.Id;
 
         if (ptrace(PTRACE_ATTACH, pid, 0, 0) < 0)
             throw new InvalidOperationException($"ptrace ATTACH failed: {Marshal.GetLastPInvokeError()}");
 
-        waitpid(pid, out _, 0);
-
         try
         {
+            if (waitpid(pid, out _, 0) < 0)
+                throw new InvalidOperationException($"waitpid after ATTACH failed: {Marshal.GetLastPInvokeError()}");
+
             var oldRegs = GetRegs(pid);
             var regs = oldRegs;
 
@@ -60,28 +66,68 @@ static partial class LinuxInjector
             nint pathAddr = (nint)((long)(oldRegs.rsp - 256) & ~7L);
             WriteMemory(pid, pathAddr, pathBytes);
 
-            long savedInsn = ptrace(PTRACE_PEEKDATA, pid, (nint)oldRegs.rip, 0);
-            ptrace(PTRACE_POKEDATA, pid, (nint)oldRegs.rip, (nint)((savedInsn & ~0xFFL) | 0xCC));
+            long savedInsn = PeekData(pid, (nint)oldRegs.rip);
+            PokeData(pid, (nint)oldRegs.rip, (nint)((savedInsn & ~0xFFL) | 0xCC));
 
-            regs.rip = (ulong)dlopenAddr;
-            regs.rdi = (ulong)pathAddr;
-            regs.rsi = RTLD_NOW;
-            regs.rsp = ((ulong)pathAddr - 16) & ~0xFUL;
+            try
+            {
+                regs.rip = (ulong)dlopenAddr;
+                regs.rdi = (ulong)pathAddr;
+                regs.rsi = RTLD_NOW;
+                regs.rsp = (((ulong)pathAddr - 16) & ~0xFUL) - 8;
+                regs.orig_rax = unchecked((ulong)-1L);
 
-            ptrace(PTRACE_POKEDATA, pid, (nint)regs.rsp, (nint)oldRegs.rip);
+                PokeData(pid, (nint)regs.rsp, (nint)oldRegs.rip);
+                SetRegs(pid, regs);
 
-            SetRegs(pid, regs);
+                if (Debug)
+                {
+                    Console.WriteLine($"[hauyne] dlopen=0x{dlopenAddr:x} pathAddr=0x{pathAddr:x} origRip=0x{oldRegs.rip:x} newRsp=0x{regs.rsp:x}");
+                    Console.WriteLine($"[hauyne] path: {soPath}");
+                }
 
-            ptrace(PTRACE_CONT, pid, 0, 0);
-            waitpid(pid, out _, 0);
+                if (ptrace(PTRACE_CONT, pid, 0, 0) < 0)
+                    throw new InvalidOperationException($"PTRACE_CONT failed: {Marshal.GetLastPInvokeError()}");
 
-            ptrace(PTRACE_POKEDATA, pid, (nint)oldRegs.rip, (nint)savedInsn);
-            SetRegs(pid, oldRegs);
+                if (waitpid(pid, out int status, 0) < 0)
+                    throw new InvalidOperationException($"waitpid after CONT failed: {Marshal.GetLastPInvokeError()}");
+
+                if (Debug)
+                {
+                    int stopSig = (status & 0x7f) == 0x7f ? (status >> 8) & 0xff : -1;
+                    var afterRegs = GetRegs(pid);
+                    Console.WriteLine($"[hauyne] waitpid status=0x{status:x} stopSig={stopSig} (5=SIGTRAP expected)");
+                    Console.WriteLine($"[hauyne] after: rip=0x{afterRegs.rip:x} rax=0x{afterRegs.rax:x} (dlopen return)");
+                    if (afterRegs.rax == 0)
+                        Console.WriteLine("[hauyne] !!! dlopen returned NULL in target !!!");
+                }
+            }
+            finally
+            {
+                // Must always remove the INT3 or the tracee SIGTRAP-dies on detach.
+                ptrace(PTRACE_POKEDATA, pid, (nint)oldRegs.rip, (nint)savedInsn);
+                try { SetRegs(pid, oldRegs); } catch { }
+            }
         }
         finally
         {
             ptrace(PTRACE_DETACH, pid, 0, 0);
         }
+    }
+
+    static long PeekData(int pid, nint addr)
+    {
+        Marshal.SetLastSystemError(0);
+        long word = ptrace(PTRACE_PEEKDATA, pid, addr, 0);
+        if (word == -1 && Marshal.GetLastPInvokeError() != 0)
+            throw new InvalidOperationException($"PTRACE_PEEKDATA failed: {Marshal.GetLastPInvokeError()}");
+        return word;
+    }
+
+    static void PokeData(int pid, nint addr, nint data)
+    {
+        if (ptrace(PTRACE_POKEDATA, pid, addr, data) < 0)
+            throw new InvalidOperationException($"PTRACE_POKEDATA failed: {Marshal.GetLastPInvokeError()}");
     }
 
     static UserRegsStruct GetRegs(int pid)
@@ -123,7 +169,7 @@ static partial class LinuxInjector
 
             if (remaining < sizeof(long))
             {
-                word = ptrace(PTRACE_PEEKDATA, pid, addr + i, 0);
+                word = PeekData(pid, addr + i);
                 long mask = (1L << (remaining * 8)) - 1;
                 word &= ~mask;
             }
@@ -131,7 +177,7 @@ static partial class LinuxInjector
             for (int j = 0; j < remaining; j++)
                 word |= (long)data[i + j] << (j * 8);
 
-            ptrace(PTRACE_POKEDATA, pid, addr + i, (nint)word);
+            PokeData(pid, addr + i, (nint)word);
         }
     }
 
