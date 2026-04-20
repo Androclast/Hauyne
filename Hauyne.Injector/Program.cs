@@ -9,7 +9,6 @@
  */
 
 using System.Diagnostics;
-using System.Diagnostics.Metrics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -24,7 +23,7 @@ if (targetProcess == null)
 }
 
 var bootstrapName = OperatingSystem.IsWindows() ? "Hauyne.Bootstrap.dll" : "libHauyne.Bootstrap.so";
-var bootstrapPath = Path.GetFullPath(bootstrapName);
+var bootstrapPath = Path.GetFullPath(bootstrapName, AppContext.BaseDirectory);
 if (!File.Exists(bootstrapPath))
 {
     Console.WriteLine($"Bootstrap not found: {bootstrapPath}");
@@ -128,11 +127,11 @@ static partial class Injector
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial nint CreateRemoteThread(nint hProcess, nint attributes, uint stackSize, nint startAddress, nint parameter, uint flags, out uint threadId);
 
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern nint GetModuleHandle(string moduleName);
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint GetModuleHandle(string moduleName);
 
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
-    private static extern nint GetProcAddress(nint hModule, string procName);
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial nint GetProcAddress(nint hModule, string procName);
 
     [LibraryImport("kernel32.dll")]
     private static partial uint WaitForSingleObject(nint handle, uint milliseconds);

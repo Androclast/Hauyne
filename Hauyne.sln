@@ -1,7 +1,5 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Hauyne.Bootstrap", "Hauyne.Bootstrap\Hauyne.Bootstrap.vcxproj", "{CC305B93-6DC3-4301-8BA6-6CE374683B55}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Hauyne.Injector", "Hauyne.Injector\Hauyne.Injector.csproj", "{5FC34F26-4733-4EE6-9960-88F78B57272F}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Hauyne.Payload", "Hauyne.Payload\Hauyne.Payload.csproj", "{B00E597A-1CBE-4646-A413-8C1C62522FA1}"
@@ -12,10 +10,6 @@ Global
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{CC305B93-6DC3-4301-8BA6-6CE374683B55}.Release|Any CPU.ActiveCfg = Release|x64
-		{CC305B93-6DC3-4301-8BA6-6CE374683B55}.Release|Any CPU.Build.0 = Release|x64
-		{CC305B93-6DC3-4301-8BA6-6CE374683B55}.Debug|Any CPU.ActiveCfg = Release|x64
-		{CC305B93-6DC3-4301-8BA6-6CE374683B55}.Debug|Any CPU.Build.0 = Release|x64
 		{5FC34F26-4733-4EE6-9960-88F78B57272F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{5FC34F26-4733-4EE6-9960-88F78B57272F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5FC34F26-4733-4EE6-9960-88F78B57272F}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -24,5 +18,8 @@ Global
 		{B00E597A-1CBE-4646-A413-8C1C62522FA1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B00E597A-1CBE-4646-A413-8C1C62522FA1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B00E597A-1CBE-4646-A413-8C1C62522FA1}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
 	EndGlobalSection
 EndGlobal

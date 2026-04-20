@@ -16,6 +16,8 @@ using System.Text;
 [SupportedOSPlatform("linux")]
 static partial class LinuxInjector
 {
+    static readonly bool Debug = Environment.GetEnvironmentVariable("HAUYNE_DEBUG") == "1";
+
     const int PTRACE_PEEKDATA = 2;
     const int PTRACE_POKEDATA = 5;
     const int PTRACE_CONT = 7;
@@ -42,6 +44,9 @@ static partial class LinuxInjector
 
     public static void Inject(Process process, string soPath)
     {
+        if (RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            throw new PlatformNotSupportedException("Linux injection requires x86-64");
+
         int pid = process.Id;
 
         if (ptrace(PTRACE_ATTACH, pid, 0, 0) < 0)
@@ -66,14 +71,31 @@ static partial class LinuxInjector
             regs.rip = (ulong)dlopenAddr;
             regs.rdi = (ulong)pathAddr;
             regs.rsi = RTLD_NOW;
-            regs.rsp = ((ulong)pathAddr - 16) & ~0xFUL;
+            regs.rsp = (((ulong)pathAddr - 16) & ~0xFUL) - 8;
+            regs.orig_rax = unchecked((ulong)-1L);
 
             ptrace(PTRACE_POKEDATA, pid, (nint)regs.rsp, (nint)oldRegs.rip);
 
             SetRegs(pid, regs);
 
+            if (Debug)
+            {
+                Console.WriteLine($"[hauyne] dlopen=0x{dlopenAddr:x} pathAddr=0x{pathAddr:x} origRip=0x{oldRegs.rip:x} newRsp=0x{regs.rsp:x}");
+                Console.WriteLine($"[hauyne] path: {soPath}");
+            }
+
             ptrace(PTRACE_CONT, pid, 0, 0);
-            waitpid(pid, out _, 0);
+            waitpid(pid, out int status, 0);
+
+            if (Debug)
+            {
+                int stopSig = (status & 0x7f) == 0x7f ? (status >> 8) & 0xff : -1;
+                var afterRegs = GetRegs(pid);
+                Console.WriteLine($"[hauyne] waitpid status=0x{status:x} stopSig={stopSig} (5=SIGTRAP expected)");
+                Console.WriteLine($"[hauyne] after: rip=0x{afterRegs.rip:x} rax=0x{afterRegs.rax:x} (dlopen return)");
+                if (afterRegs.rax == 0)
+                    Console.WriteLine("[hauyne] !!! dlopen returned NULL in target !!!");
+            }
 
             ptrace(PTRACE_POKEDATA, pid, (nint)oldRegs.rip, (nint)savedInsn);
             SetRegs(pid, oldRegs);
