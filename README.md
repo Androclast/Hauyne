@@ -33,3 +33,5 @@ Knobs:
 
 * x86-64 only
 * Root, or `ptrace_scope` shuttered: `echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope`
+
+<img width="789" height="477" alt="image" src="https://github.com/user-attachments/assets/8ada96ce-7135-47cb-b144-e60cd9ada6eb" />
