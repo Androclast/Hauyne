@@ -13,8 +13,23 @@ Knobs:
 * `./build.sh --zig-targets "x86_64-linux-gnu x86_64-windows-gnu"` to narrow targets
 * `CONFIG=Debug OPTIMIZE=Debug ./build.sh` for debug builds
 
+## Usage
+
+```
+./Hauyne.Injector <process-name> [payload-path]
+```
+
+`<process-name>` is the process base name (no `.exe`). `[payload-path]` is optional; if omitted, the Bootstrap falls back to `Hauyne.Payload.dll` next to its own `.so`/`.dll`.
+
 ## Requirements
-* Matching .NET version with target (Targets .NET 9 out of the box)
+
+* Target must be a running .NET 5+ process
+* Matching .NET version with target (targets .NET 9 out of the box)
 * Matching arch with target
-* Zig 
+* Zig
 * .NET SDK
+
+### Linux
+
+* x86-64 only
+* Root, or `ptrace_scope` shuttered: `echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope`
