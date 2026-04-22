@@ -11,6 +11,10 @@ const is_windows = builtin.os.tag == .windows;
 
 const max_matches = 64;
 
+const ScanStats = struct {
+    inaccessible: usize = 0,
+};
+
 fn println(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) void {
     const msg = std.fmt.allocPrint(allocator, fmt, args) catch return;
     defer allocator.free(msg);
@@ -69,9 +73,15 @@ pub fn main() u8 {
 }
 
 fn resolveTarget(allocator: std.mem.Allocator, spec: []const u8) !u32 {
+    var stats: ScanStats = .{};
+
     if (std.fmt.parseInt(u32, spec, 10)) |pid| {
-        if (!(try isDotNetProcess(allocator, pid))) {
-            std.debug.print("PID {d} is not a .NET process (hostfxr not loaded)\n", .{pid});
+        if (!(try isDotNetProcess(allocator, pid, &stats))) {
+            if (stats.inaccessible > 0) {
+                std.debug.print("Cannot inspect PID {d} — permission denied (try root or ptrace_scope=0)\n", .{pid});
+            } else {
+                std.debug.print("PID {d} is not a .NET process (hostfxr not loaded)\n", .{pid});
+            }
             return error.NoDotNetMatch;
         }
         return pid;
@@ -79,17 +89,21 @@ fn resolveTarget(allocator: std.mem.Allocator, spec: []const u8) !u32 {
 
     var matches: [max_matches]u32 = undefined;
     var n: usize = 0;
-    try collectMatches(allocator, spec, &matches, &n);
+    try collectMatches(allocator, spec, &matches, &n, &stats);
 
     if (n == 0) {
-        std.debug.print("No process matches '{s}'\n", .{spec});
+        if (stats.inaccessible > 0) {
+            std.debug.print("No process matches '{s}' ({d} process(es) unreadable — try root or ptrace_scope=0)\n", .{ spec, stats.inaccessible });
+        } else {
+            std.debug.print("No process matches '{s}'\n", .{spec});
+        }
         return error.NotFound;
     }
 
     var valid: [max_matches]u32 = undefined;
     var vn: usize = 0;
     for (matches[0..n]) |pid| {
-        if (isDotNetProcess(allocator, pid) catch false) {
+        if (isDotNetProcess(allocator, pid, &stats) catch false) {
             valid[vn] = pid;
             vn += 1;
         }
@@ -116,12 +130,12 @@ fn printPidList(pids: []const u32) void {
     std.debug.print("\n", .{});
 }
 
-fn collectMatches(allocator: std.mem.Allocator, name: []const u8, out: []u32, count: *usize) !void {
-    if (is_windows) return collectMatchesWindows(name, out, count);
-    return collectMatchesLinux(allocator, name, out, count);
+fn collectMatches(allocator: std.mem.Allocator, name: []const u8, out: []u32, count: *usize, stats: *ScanStats) !void {
+    if (is_windows) return collectMatchesWindows(name, out, count, stats);
+    return collectMatchesLinux(allocator, name, out, count, stats);
 }
 
-fn collectMatchesLinux(allocator: std.mem.Allocator, name: []const u8, out: []u32, count: *usize) !void {
+fn collectMatchesLinux(allocator: std.mem.Allocator, name: []const u8, out: []u32, count: *usize, stats: *ScanStats) !void {
     _ = allocator;
     const self_pid: u32 = @intCast(std.posix.system.getpid());
 
@@ -139,7 +153,13 @@ fn collectMatchesLinux(allocator: std.mem.Allocator, name: []const u8, out: []u3
         const link = std.fmt.bufPrint(&link_buf, "/proc/{d}/exe", .{pid}) catch continue;
 
         var target_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const target = std.fs.readLinkAbsolute(link, &target_buf) catch continue;
+        const target = std.fs.readLinkAbsolute(link, &target_buf) catch |err| switch (err) {
+            error.AccessDenied, error.PermissionDenied => {
+                stats.inaccessible += 1;
+                continue;
+            },
+            else => continue,
+        };
 
         const basename = std.fs.path.basename(target);
         if (std.mem.eql(u8, basename, name)) {
@@ -150,7 +170,8 @@ fn collectMatchesLinux(allocator: std.mem.Allocator, name: []const u8, out: []u3
     }
 }
 
-fn collectMatchesWindows(name: []const u8, out: []u32, count: *usize) !void {
+fn collectMatchesWindows(name: []const u8, out: []u32, count: *usize, stats: *ScanStats) !void {
+    _ = stats;
     const windows = std.os.windows;
 
     const TH32CS_SNAPPROCESS: windows.DWORD = 0x00000002;
@@ -219,19 +240,25 @@ fn collectMatchesWindows(name: []const u8, out: []u32, count: *usize) !void {
     }
 }
 
-fn isDotNetProcess(allocator: std.mem.Allocator, pid: u32) !bool {
+fn isDotNetProcess(allocator: std.mem.Allocator, pid: u32, stats: *ScanStats) !bool {
     if (is_windows) {
         return isDotNetProcessWindows(pid);
     } else {
-        return isDotNetProcessLinux(allocator, pid);
+        return isDotNetProcessLinux(allocator, pid, stats);
     }
 }
 
-fn isDotNetProcessLinux(allocator: std.mem.Allocator, pid: u32) !bool {
+fn isDotNetProcessLinux(allocator: std.mem.Allocator, pid: u32, stats: *ScanStats) !bool {
     const maps_path = try std.fmt.allocPrint(allocator, "/proc/{}/maps", .{pid});
     defer allocator.free(maps_path);
 
-    const data = std.fs.cwd().readFileAlloc(allocator, maps_path, 16 * 1024 * 1024) catch return false;
+    const data = std.fs.cwd().readFileAlloc(allocator, maps_path, 16 * 1024 * 1024) catch |err| switch (err) {
+        error.AccessDenied, error.PermissionDenied => {
+            stats.inaccessible += 1;
+            return false;
+        },
+        else => return false,
+    };
     defer allocator.free(data);
 
     var it = std.mem.splitScalar(u8, data, '\n');
