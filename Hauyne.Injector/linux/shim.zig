@@ -26,11 +26,10 @@ pub fn buildScratchPage(
     @memcpy(page[PathOffset .. PathOffset + so_path.len], so_path);
     page[PathOffset + so_path.len] = 0;
 
-    const have_payload = if (payload_path) |pp| blk: {
+    if (payload_path) |pp| {
         @memcpy(page[PayloadOffset .. PayloadOffset + pp.len], pp);
         page[PayloadOffset + pp.len] = 0;
-        break :blk true;
-    } else false;
+    }
 
     const symbol = "hauyne_start";
     @memcpy(page[SymbolOffset .. SymbolOffset + symbol.len], symbol);
@@ -38,7 +37,7 @@ pub fn buildScratchPage(
 
     const pthread_handle_addr: u64 = @intCast(scratch_base); // 8 bytes at offset 0
     const path_addr: u64 = @intCast(scratch_base + PathOffset);
-    const payload_addr: u64 = if (have_payload) @intCast(scratch_base + PayloadOffset) else 0;
+    const payload_addr: u64 = if (payload_path != null) @intCast(scratch_base + PayloadOffset) else 0;
     const symbol_addr: u64 = @intCast(scratch_base + SymbolOffset);
     const payload_shim_addr: u64 = @intCast(scratch_base + PayloadShimOff);
 
