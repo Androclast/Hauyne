@@ -23,11 +23,12 @@ pub fn main() u8 {
     const args = std.process.argsAlloc(allocator) catch return 1;
 
     if (args.len < 2) {
-        std.debug.print("Your other argument is the process name without the .exe part mkay\n", .{});
+        std.debug.print("Usage: {s} <process-name> [payload-path]\n", .{args[0]});
         return 1;
     }
 
     const process_name = args[1];
+    const payload_path: ?[]const u8 = if (args.len >= 3) args[2] else null;
 
     const pid = findProcess(allocator, process_name) catch |err| {
         if (err == error.NotFound) {
@@ -59,13 +60,13 @@ pub fn main() u8 {
 
     if (is_windows) {
         const windows = @import("windows.zig");
-        windows.inject(allocator, @intCast(pid), bootstrap_path) catch |err| {
+        windows.inject(allocator, @intCast(pid), bootstrap_path, payload_path) catch |err| {
             std.debug.print("Injection failed: {}\n", .{err});
             return 1;
         };
     } else if (builtin.os.tag == .linux) {
         const linux = @import("linux/linux.zig");
-        linux.inject(allocator, @intCast(pid), bootstrap_path) catch |err| {
+        linux.inject(allocator, @intCast(pid), bootstrap_path, payload_path) catch |err| {
             std.debug.print("Injection failed: {}\n", .{err});
             return 1;
         };

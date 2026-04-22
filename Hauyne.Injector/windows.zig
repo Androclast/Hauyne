@@ -37,7 +37,8 @@ const MEM_RELEASE: DWORD = 0x8000;
 
 const PAGE_READWRITE: DWORD = 0x04;
 
-pub fn inject(allocator: std.mem.Allocator, pid: DWORD, dll_path: []const u8) !void {
+pub fn inject(allocator: std.mem.Allocator, pid: DWORD, dll_path: []const u8, payload_path: ?[]const u8) !void {
+    _ = payload_path;
     const path_utf16 = try std.unicode.utf8ToUtf16LeAllocZ(allocator, dll_path);
     defer allocator.free(path_utf16);
 

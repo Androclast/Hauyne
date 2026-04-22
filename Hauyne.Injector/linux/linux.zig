@@ -24,7 +24,8 @@ const MAP_ANONYMOUS: u64 = 0x20;
 
 var debug: bool = false;
 
-pub fn inject(allocator: std.mem.Allocator, tgid: i32, so_path: []const u8) !void {
+pub fn inject(allocator: std.mem.Allocator, tgid: i32, so_path: []const u8, payload_path: ?[]const u8) !void {
+    _ = payload_path;
     if (comptime builtin.cpu.arch != .x86_64) return error.UnsupportedArch;
 
     debug = blk: {
