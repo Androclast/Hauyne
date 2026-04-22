@@ -25,7 +25,6 @@ const MAP_ANONYMOUS: u64 = 0x20;
 var debug: bool = false;
 
 pub fn inject(allocator: std.mem.Allocator, tgid: i32, so_path: []const u8, payload_path: ?[]const u8) !void {
-    _ = payload_path;
     if (comptime builtin.cpu.arch != .x86_64) return error.UnsupportedArch;
 
     debug = blk: {
@@ -36,11 +35,12 @@ pub fn inject(allocator: std.mem.Allocator, tgid: i32, so_path: []const u8, payl
     const victim = try victim_mod.pickVictimThread(allocator, tgid);
 
     const dlopen_addr = try symbols.findSymbolInTarget(allocator, tgid, "dlopen");
+    const dlsym_addr = try symbols.findSymbolInTarget(allocator, tgid, "dlsym");
     const pthread_create_addr = try symbols.findSymbolInTarget(allocator, tgid, "pthread_create");
 
     std.debug.print("[hauyne] victim tid={d} (tgid={d})\n", .{ victim, tgid });
     if (debug) {
-        std.debug.print("[hauyne] dlopen=0x{x} pthread_create=0x{x}\n", .{ dlopen_addr, pthread_create_addr });
+        std.debug.print("[hauyne] dlopen=0x{x} dlsym=0x{x} pthread_create=0x{x}\n", .{ dlopen_addr, dlsym_addr, pthread_create_addr });
     }
 
     if (ptrace_mod.ptrace(ptrace_mod.PTRACE_SEIZE, victim, 0, 0) < 0) return error.PtraceSeizeFailed;
@@ -62,10 +62,15 @@ pub fn inject(allocator: std.mem.Allocator, tgid: i32, so_path: []const u8, payl
     if ((insn_at_prev & 0xFFFF) != 0x050F)
         return error.InvalidSyscallOpcode;
 
+    if (so_path.len >= shim.PayloadOffset - shim.PathOffset) return error.BootstrapPathTooLong;
+    if (payload_path) |pp| {
+        if (pp.len >= shim.SymbolOffset - shim.PayloadOffset) return error.PayloadPathTooLong;
+    }
+
     const scratch = try bootstrapMmap(victim, saved);
     if (debug) std.debug.print("[hauyne] scratch=0x{x}\n", .{scratch});
 
-    var page = shim.buildScratchPage(so_path, dlopen_addr, pthread_create_addr, scratch);
+    var page = shim.buildScratchPage(so_path, payload_path, dlopen_addr, dlsym_addr, pthread_create_addr, scratch);
     try ptrace_mod.writeMemory(victim, scratch, &page);
 
     try runVictimShim(victim, saved, scratch + shim.VictimShimOff);
