@@ -4,7 +4,6 @@
 // This Source Code Form is "Incompatible With Secondary Licenses", as defined by the
 // Mozilla Public License, v. 2.0.
 
-const std = @import("std");
 const t = @import("types/common.zig");
 const win = @import("types/windows.zig");
 const lin = @import("types/linux.zig");
@@ -149,29 +148,18 @@ const platform_entry = if (t.is_windows) struct {
         if (fdwReason == 1) {
             g_hModule = hModule;
             _ = win.DisableThreadLibraryCalls(hModule);
-            if (win.CreateThread(null, 0, &threadProc, null, 0, null) == null)
-                p.appendLog("hauyne.log", "hauyne: CreateThread failed");
         }
         return 1;
     }
 
-    fn threadProc(param: ?*anyopaque) callconv(t.CC) win.DWORD {
+    pub export fn hauyne_start(param: ?*anyopaque) callconv(t.CC) win.DWORD {
         loadPayload(param);
         if (g_hModule) |hmod| win.FreeLibraryAndExitThread(hmod, 0);
         return 0;
     }
 } else struct {
-    pub export fn hauyne_on_load() callconv(t.CC) void {
-        var thread: std.c.pthread_t = undefined;
-        if (lin.pthread_create(&thread, null, &threadEntry, null) != 0) {
-            p.appendLog("hauyne.log", "hauyne: pthread_create failed");
-            return;
-        }
-        _ = lin.pthread_detach(thread);
-    }
-
-    fn threadEntry(arg: ?*anyopaque) callconv(t.CC) ?*anyopaque {
-        loadPayload(arg);
+    pub export fn hauyne_start(param: ?*anyopaque) callconv(t.CC) ?*anyopaque {
+        loadPayload(param);
         return null;
     }
 };

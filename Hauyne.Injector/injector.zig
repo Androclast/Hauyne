@@ -9,6 +9,8 @@ const builtin = @import("builtin");
 
 const is_windows = builtin.os.tag == .windows;
 
+const max_matches = 64;
+
 fn println(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) void {
     const msg = std.fmt.allocPrint(allocator, fmt, args) catch return;
     defer allocator.free(msg);
@@ -23,20 +25,14 @@ pub fn main() u8 {
     const args = std.process.argsAlloc(allocator) catch return 1;
 
     if (args.len < 2) {
-        std.debug.print("Your other argument is the process name without the .exe part mkay\n", .{});
+        std.debug.print("Usage: {s} <process-name|pid> [payload-path]\n", .{args[0]});
         return 1;
     }
 
-    const process_name = args[1];
+    const process_spec = args[1];
+    const payload_path: ?[]const u8 = if (args.len >= 3) args[2] else null;
 
-    const pid = findProcess(allocator, process_name) catch |err| {
-        if (err == error.NotFound) {
-            std.debug.print("Process not found\n", .{});
-            return 1;
-        }
-        std.debug.print("Process lookup failed: {}\n", .{err});
-        return 1;
-    };
+    const pid = resolveTarget(allocator, process_spec) catch return 1;
 
     const exe_dir = std.fs.selfExeDirPathAlloc(allocator) catch {
         std.debug.print("Failed to resolve exe dir\n", .{});
@@ -51,21 +47,15 @@ pub fn main() u8 {
         return 1;
     };
 
-    const is_dotnet = isDotNetProcess(allocator, pid) catch false;
-    if (!is_dotnet) {
-        std.debug.print("{s} ({}) does not look like a .NET process (hostfxr not loaded)\n", .{ process_name, pid });
-        return 1;
-    }
-
     if (is_windows) {
         const windows = @import("windows.zig");
-        windows.inject(allocator, @intCast(pid), bootstrap_path) catch |err| {
+        windows.inject(allocator, @intCast(pid), bootstrap_path, payload_path) catch |err| {
             std.debug.print("Injection failed: {}\n", .{err});
             return 1;
         };
     } else if (builtin.os.tag == .linux) {
         const linux = @import("linux/linux.zig");
-        linux.inject(allocator, @intCast(pid), bootstrap_path) catch |err| {
+        linux.inject(allocator, @intCast(pid), bootstrap_path, payload_path) catch |err| {
             std.debug.print("Injection failed: {}\n", .{err});
             return 1;
         };
@@ -74,19 +64,77 @@ pub fn main() u8 {
         return 1;
     }
 
-    println(allocator, "Injected into {s} ({})\n", .{ process_name, pid });
+    println(allocator, "Injected into PID {}\n", .{pid});
     return 0;
 }
 
-fn findProcess(allocator: std.mem.Allocator, name: []const u8) !u32 {
-    if (is_windows) {
-        return findProcessWindows(name);
-    } else {
-        return findProcessLinux(allocator, name);
+fn resolveTarget(allocator: std.mem.Allocator, spec: []const u8) !u32 {
+    var inaccessible: usize = 0;
+
+    if (std.fmt.parseInt(u32, spec, 10)) |pid| {
+        if (!(try isDotNetProcess(allocator, pid, &inaccessible))) {
+            if (inaccessible > 0) {
+                std.debug.print("Cannot inspect PID {d} — permission denied (try root or ptrace_scope=0)\n", .{pid});
+            } else {
+                std.debug.print("PID {d} is not a .NET process (hostfxr not loaded)\n", .{pid});
+            }
+            return error.NoDotNetMatch;
+        }
+        return pid;
+    } else |_| {}
+
+    var matches: [max_matches]u32 = undefined;
+    var n: usize = 0;
+    try collectMatches(spec, &matches, &n, &inaccessible);
+
+    if (n == 0) {
+        if (inaccessible > 0) {
+            std.debug.print("No process matches '{s}' ({d} process(es) unreadable — try root or ptrace_scope=0)\n", .{ spec, inaccessible });
+        } else {
+            std.debug.print("No process matches '{s}'\n", .{spec});
+        }
+        return error.NotFound;
     }
+
+    // Compact .NET-valid PIDs over the front of `matches`. If vn == 0 no writes
+    // happen and matches[0..n] stays intact for the "none loaded hostfxr" list.
+    var vn: usize = 0;
+    for (matches[0..n]) |pid| {
+        if (isDotNetProcess(allocator, pid, &inaccessible) catch false) {
+            matches[vn] = pid;
+            vn += 1;
+        }
+    }
+
+    if (vn == 0) {
+        std.debug.print("'{s}' matched {d} process(es) but none loaded hostfxr: ", .{ spec, n });
+        printPidList(matches[0..n]);
+        return error.NoDotNetMatch;
+    }
+    if (vn > 1) {
+        std.debug.print("'{s}' matches {d} .NET processes, pass a PID instead: ", .{ spec, vn });
+        printPidList(matches[0..vn]);
+        return error.AmbiguousMatch;
+    }
+    return matches[0];
 }
 
-fn findProcessLinux(allocator: std.mem.Allocator, name: []const u8) !u32 {
+fn printPidList(pids: []const u32) void {
+    for (pids, 0..) |pid, i| {
+        if (i > 0) std.debug.print(", ", .{});
+        std.debug.print("{d}", .{pid});
+    }
+    std.debug.print("\n", .{});
+}
+
+fn collectMatches(name: []const u8, out: []u32, count: *usize, inaccessible: *usize) !void {
+    if (is_windows) return collectMatchesWindows(name, out, count);
+    return collectMatchesLinux(name, out, count, inaccessible);
+}
+
+fn collectMatchesLinux(name: []const u8, out: []u32, count: *usize, inaccessible: *usize) !void {
+    const self_pid: u32 = @intCast(std.posix.system.getpid());
+
     var proc_dir = try std.fs.openDirAbsolute("/proc", .{ .iterate = true });
     defer proc_dir.close();
 
@@ -94,28 +142,56 @@ fn findProcessLinux(allocator: std.mem.Allocator, name: []const u8) !u32 {
     while (try it.next()) |entry| {
         if (entry.kind != .directory) continue;
 
-        const pid_str = entry.name;
-        _ = std.fmt.parseInt(u32, pid_str, 10) catch continue;
+        const pid = std.fmt.parseInt(u32, entry.name, 10) catch continue;
+        if (pid == self_pid) continue;
 
-        const comm_path = try std.fmt.allocPrint(allocator, "/proc/{s}/comm", .{pid_str});
-        defer allocator.free(comm_path);
-
-        const comm_file = std.fs.openFileAbsolute(comm_path, .{}) catch continue;
-        defer comm_file.close();
-
-        var buf: [256]u8 = undefined;
-        const n = comm_file.read(&buf) catch continue;
-        const comm = std.mem.trimRight(u8, buf[0..n], "\n\r");
-
-        if (std.mem.eql(u8, comm, name)) {
-            return std.fmt.parseInt(u32, pid_str, 10) catch continue;
+        if (pidMatchesName(pid, name, inaccessible)) {
+            if (count.* >= out.len) return;
+            out[count.*] = pid;
+            count.* += 1;
         }
     }
-
-    return error.NotFound;
 }
 
-fn findProcessWindows(name: []const u8) !u32 {
+fn pidMatchesName(pid: u32, name: []const u8, inaccessible: *usize) bool {
+    var path_buf: [64]u8 = undefined;
+
+    const exe_link = std.fmt.bufPrint(&path_buf, "/proc/{d}/exe", .{pid}) catch return false;
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (std.fs.readLinkAbsolute(exe_link, &target_buf)) |target| {
+        if (nameMatches(std.fs.path.basename(target), name)) return true;
+    } else |err| switch (err) {
+        error.AccessDenied, error.PermissionDenied => inaccessible.* += 1,
+        else => {},
+    }
+
+    const cmdline_path = std.fmt.bufPrint(&path_buf, "/proc/{d}/cmdline", .{pid}) catch return false;
+    const file = std.fs.openFileAbsolute(cmdline_path, .{}) catch return false;
+    defer file.close();
+
+    var cmdline: [4096]u8 = undefined;
+    const n = file.readAll(&cmdline) catch return false;
+
+    var args = std.mem.splitScalar(u8, cmdline[0..n], 0);
+    while (args.next()) |arg| {
+        if (arg.len == 0) continue;
+        if (nameMatches(std.fs.path.basename(arg), name)) return true;
+    }
+    return false;
+}
+
+fn nameMatches(candidate: []const u8, name: []const u8) bool {
+    if (std.mem.eql(u8, candidate, name)) return true;
+    inline for (.{ ".dll", ".exe" }) |ext| {
+        if (std.mem.endsWith(u8, candidate, ext)) {
+            const stem = candidate[0 .. candidate.len - ext.len];
+            if (std.mem.eql(u8, stem, name)) return true;
+        }
+    }
+    return false;
+}
+
+fn collectMatchesWindows(name: []const u8, out: []u32, count: *usize) !void {
     const windows = std.os.windows;
 
     const TH32CS_SNAPPROCESS: windows.DWORD = 0x00000002;
@@ -133,9 +209,15 @@ fn findProcessWindows(name: []const u8) !u32 {
         szExeFile: [260]u16,
     };
 
+    const GetCurrentProcessId = @extern(*const fn () callconv(.winapi) windows.DWORD, .{
+        .name = "GetCurrentProcessId",
+        .library_name = "kernel32",
+    });
+    const self_pid = GetCurrentProcessId();
+
     const kernel32 = windows.kernel32;
     const snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == windows.INVALID_HANDLE_VALUE) return error.NotFound;
+    if (snapshot == windows.INVALID_HANDLE_VALUE) return error.SnapshotFailed;
     defer _ = windows.CloseHandle(snapshot);
 
     var entry: PROCESSENTRY32W = undefined;
@@ -150,10 +232,15 @@ fn findProcessWindows(name: []const u8) !u32 {
         .library_name = "kernel32",
     });
 
-    if (Process32FirstW(snapshot, &entry) == 0) return error.NotFound;
+    if (Process32FirstW(snapshot, &entry) == 0) return;
 
     while (true) {
-        const exe_wide = entry.szExeFile[0..std.mem.indexOfScalar(u16, &entry.szExeFile, 0) orelse 260];
+        if (entry.th32ProcessID == self_pid) {
+            if (Process32NextW(snapshot, &entry) == 0) break;
+            continue;
+        }
+
+        const exe_wide = entry.szExeFile[0 .. std.mem.indexOfScalar(u16, &entry.szExeFile, 0) orelse 260];
         var exe_buf: [520]u8 = undefined;
         const exe_len = std.unicode.utf16LeToUtf8(&exe_buf, exe_wide) catch 0;
         const exe_name = exe_buf[0..exe_len];
@@ -163,29 +250,32 @@ fn findProcessWindows(name: []const u8) !u32 {
         else
             exe_name;
 
-        if (std.mem.eql(u8, stem, name) or std.mem.eql(u8, exe_name, name)) {
-            return entry.th32ProcessID;
+        if (std.ascii.eqlIgnoreCase(stem, name) or std.ascii.eqlIgnoreCase(exe_name, name)) {
+            if (count.* >= out.len) return;
+            out[count.*] = entry.th32ProcessID;
+            count.* += 1;
         }
 
         if (Process32NextW(snapshot, &entry) == 0) break;
     }
-
-    return error.NotFound;
 }
 
-fn isDotNetProcess(allocator: std.mem.Allocator, pid: u32) !bool {
-    if (is_windows) {
-        return isDotNetProcessWindows(pid);
-    } else {
-        return isDotNetProcessLinux(allocator, pid);
-    }
+fn isDotNetProcess(allocator: std.mem.Allocator, pid: u32, inaccessible: *usize) !bool {
+    if (is_windows) return isDotNetProcessWindows(pid);
+    return isDotNetProcessLinux(allocator, pid, inaccessible);
 }
 
-fn isDotNetProcessLinux(allocator: std.mem.Allocator, pid: u32) !bool {
+fn isDotNetProcessLinux(allocator: std.mem.Allocator, pid: u32, inaccessible: *usize) !bool {
     const maps_path = try std.fmt.allocPrint(allocator, "/proc/{}/maps", .{pid});
     defer allocator.free(maps_path);
 
-    const data = std.fs.cwd().readFileAlloc(allocator, maps_path, 16 * 1024 * 1024) catch return false;
+    const data = std.fs.cwd().readFileAlloc(allocator, maps_path, 16 * 1024 * 1024) catch |err| switch (err) {
+        error.AccessDenied, error.PermissionDenied => {
+            inaccessible.* += 1;
+            return false;
+        },
+        else => return false,
+    };
     defer allocator.free(data);
 
     var it = std.mem.splitScalar(u8, data, '\n');

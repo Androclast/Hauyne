@@ -21,8 +21,6 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag != .windows) {
         mod.linkSystemLibrary("dl", .{});
         mod.linkSystemLibrary("pthread", .{});
-        // Assembly stub forces the type here
-        mod.addAssemblyFile(b.path("init_array.s"));
     }
 
     const lib = b.addLibrary(.{
