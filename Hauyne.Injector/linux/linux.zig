@@ -24,7 +24,14 @@ const MAP_ANONYMOUS: u64 = 0x20;
 
 var debug: bool = false;
 
-pub fn inject(allocator: std.mem.Allocator, tgid: i32, so_path: []const u8, payload_path: ?[]const u8) !void {
+pub fn inject(
+    allocator: std.mem.Allocator,
+    tgid: i32,
+    so_path: []const u8,
+    payload_path: ?[]const u8,
+    type_name: ?[]const u8,
+    method_name: ?[]const u8,
+) !void {
     if (comptime builtin.cpu.arch != .x86_64) return error.UnsupportedArch;
 
     debug = blk: {
@@ -63,14 +70,17 @@ pub fn inject(allocator: std.mem.Allocator, tgid: i32, so_path: []const u8, payl
         return error.InvalidSyscallOpcode;
 
     if (so_path.len >= shim.PayloadOffset - shim.PathOffset) return error.BootstrapPathTooLong;
-    if (payload_path) |pp| {
-        if (pp.len >= shim.SymbolOffset - shim.PayloadOffset) return error.PayloadPathTooLong;
-    }
+    const triple_budget = shim.SymbolOffset - shim.PayloadOffset;
+    const triple_len =
+        (if (payload_path) |pp| pp.len else 0) +
+        (if (type_name) |tn| tn.len else 0) +
+        (if (method_name) |mn| mn.len else 0) + 3;
+    if (triple_len > triple_budget) return error.PayloadTripleTooLong;
 
     const scratch = try bootstrapMmap(victim, saved);
     if (debug) std.debug.print("[hauyne] scratch=0x{x}\n", .{scratch});
 
-    var page = shim.buildScratchPage(so_path, payload_path, dlopen_addr, dlsym_addr, pthread_create_addr, scratch);
+    var page = shim.buildScratchPage(so_path, payload_path, type_name, method_name, dlopen_addr, dlsym_addr, pthread_create_addr, scratch);
     try ptrace_mod.writeMemory(victim, scratch, &page);
 
     try runVictimShim(victim, saved, scratch + shim.VictimShimOff);

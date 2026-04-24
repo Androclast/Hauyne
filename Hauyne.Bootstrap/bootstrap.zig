@@ -58,11 +58,26 @@ fn loadPayload(param: ?*anyopaque) void {
     var log_buf: [4096]u8 = undefined;
     var source_buf: [4096]t.CharT = undefined;
 
-    const source: []const t.CharT = blk: {
-        if (param) |raw| {
-            const ptr: [*:0]const t.CharT = @ptrCast(@alignCast(raw));
-            break :blk ptr[0..p.charTLen(ptr)];
+    // param (when non-null) is three CharT nullable strings:
+    // assembly\0 type\0 method\0. Empty string falls back to default
+    var assembly_opt: ?[*:0]const t.CharT = null;
+    var type_opt: ?[*:0]const t.CharT = null;
+    var method_opt: ?[*:0]const t.CharT = null;
+
+    if (param) |raw| {
+        const base: [*]const t.CharT = @ptrCast(@alignCast(raw));
+        var cursor: usize = 0;
+        const slots = [_]*?[*:0]const t.CharT{ &assembly_opt, &type_opt, &method_opt };
+        for (slots) |slot| {
+            const start = cursor;
+            while (base[cursor] != 0) : (cursor += 1) {}
+            if (cursor > start) slot.* = @ptrCast(base + start);
+            cursor += 1;
         }
+    }
+
+    const source: []const t.CharT = blk: {
+        if (assembly_opt) |ap| break :blk ap[0..p.charTLen(ap)];
         break :blk ownModulePath(&source_buf) orelse {
             p.appendLog("hauyne.log", "hauyne: ownModulePath failed");
             return;
@@ -76,7 +91,7 @@ fn loadPayload(param: ?*anyopaque) void {
 
     var assembly_path: ?[*:0]const t.CharT = null;
 
-    if (param != null) {
+    if (assembly_opt != null) {
         assembly_path = p.copyToBufferCharT(&assembly_buf, source);
     } else if (p.parentDirCharT(source)) |parent| {
         assembly_path = p.joinAsciiCharT(&assembly_buf, parent, sep, "Hauyne.Payload.dll");
@@ -125,8 +140,8 @@ fn loadPayload(param: ?*anyopaque) void {
 
     var entry_ptr: ?*anyopaque = null;
     rc = get_fn(
-        p.litCharT("Hauyne.Payload.Entrypoint, Hauyne.Payload"),
-        p.litCharT("Initialize"),
+        type_opt orelse p.litCharT("Hauyne.Payload.Entrypoint, Hauyne.Payload"),
+        method_opt orelse p.litCharT("Initialize"),
         t.UNMANAGEDCALLERSONLY,
         null,
         null,

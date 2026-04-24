@@ -57,7 +57,14 @@ const MODULEENTRY32W = extern struct {
     szExePath: [260]u16,
 };
 
-pub fn inject(allocator: std.mem.Allocator, pid: DWORD, dll_path: []const u8, payload_path: ?[]const u8) !void {
+pub fn inject(
+    allocator: std.mem.Allocator,
+    pid: DWORD,
+    dll_path: []const u8,
+    payload_path: ?[]const u8,
+    type_name: ?[]const u8,
+    method_name: ?[]const u8,
+) !void {
     const path_utf16 = try std.unicode.utf8ToUtf16LeAllocZ(allocator, dll_path);
     defer allocator.free(path_utf16);
 
@@ -86,18 +93,18 @@ pub fn inject(allocator: std.mem.Allocator, pid: DWORD, dll_path: []const u8, pa
     defer if (payload_remote) |pr| {
         _ = VirtualFreeEx(hProcess, pr, 0, MEM_RELEASE);
     };
-    if (payload_path) |pp| {
-        const pp_utf16 = try std.unicode.utf8ToUtf16LeAllocZ(allocator, pp);
-        defer allocator.free(pp_utf16);
-        const pp_bytes = std.mem.sliceAsBytes(pp_utf16[0 .. pp_utf16.len + 1]);
+    if (payload_path != null or type_name != null or method_name != null) {
+        const triple = try buildTripleUtf16(allocator, payload_path, type_name, method_name);
+        defer allocator.free(triple);
+        const triple_bytes = std.mem.sliceAsBytes(triple);
         payload_remote = VirtualAllocEx(
             hProcess,
             null,
-            pp_bytes.len,
+            triple_bytes.len,
             MEM_COMMIT | MEM_RESERVE,
             PAGE_READWRITE,
         ) orelse return error.VirtualAllocExFailed;
-        if (WriteProcessMemory(hProcess, payload_remote.?, pp_bytes.ptr, pp_bytes.len, null) == 0)
+        if (WriteProcessMemory(hProcess, payload_remote.?, triple_bytes.ptr, triple_bytes.len, null) == 0)
             return error.WriteProcessMemoryFailed;
     }
 
@@ -124,6 +131,29 @@ pub fn inject(allocator: std.mem.Allocator, pid: DWORD, dll_path: []const u8, pa
     defer _ = CloseHandle(call_thread);
 
     _ = WaitForSingleObject(call_thread, 5000);
+}
+
+fn buildTripleUtf16(
+    allocator: std.mem.Allocator,
+    a: ?[]const u8,
+    b: ?[]const u8,
+    c: ?[]const u8,
+) ![]u16 {
+    const parts = [_][]const u8{ a orelse "", b orelse "", c orelse "" };
+
+    var total: usize = parts.len;
+    for (parts) |p| total += try std.unicode.calcUtf16LeLen(p);
+
+    const out = try allocator.alloc(u16, total);
+    errdefer allocator.free(out);
+
+    var i: usize = 0;
+    for (parts) |p| {
+        i += try std.unicode.utf8ToUtf16Le(out[i..], p);
+        out[i] = 0;
+        i += 1;
+    }
+    return out;
 }
 
 fn findBootstrapBaseInTarget(pid: DWORD, bootstrap_path: []const u8) !usize {

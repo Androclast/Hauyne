@@ -25,12 +25,39 @@ pub fn main() u8 {
     const args = std.process.argsAlloc(allocator) catch return 1;
 
     if (args.len < 2) {
-        std.debug.print("Usage: {s} <process-name|pid> [payload-path]\n", .{args[0]});
+        std.debug.print("Usage: {s} <process-name|pid> [payload-path] [--type <name>] [--method <name>]\n", .{args[0]});
         return 1;
     }
 
     const process_spec = args[1];
-    const payload_path: ?[]const u8 = if (args.len >= 3) args[2] else null;
+    var payload_path: ?[]const u8 = null;
+    var type_name: ?[]const u8 = null;
+    var method_name: ?[]const u8 = null;
+
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        const a = args[i];
+        if (std.mem.eql(u8, a, "--type")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("--type requires a value\n", .{});
+                return 1;
+            }
+            type_name = args[i];
+        } else if (std.mem.eql(u8, a, "--method")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("--method requires a value\n", .{});
+                return 1;
+            }
+            method_name = args[i];
+        } else if (payload_path == null) {
+            payload_path = a;
+        } else {
+            std.debug.print("Unexpected arg: {s}\n", .{a});
+            return 1;
+        }
+    }
 
     const pid = resolveTarget(allocator, process_spec) catch return 1;
 
@@ -49,13 +76,13 @@ pub fn main() u8 {
 
     if (is_windows) {
         const windows = @import("windows.zig");
-        windows.inject(allocator, @intCast(pid), bootstrap_path, payload_path) catch |err| {
+        windows.inject(allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name) catch |err| {
             std.debug.print("Injection failed: {}\n", .{err});
             return 1;
         };
     } else if (builtin.os.tag == .linux) {
         const linux = @import("linux/linux.zig");
-        linux.inject(allocator, @intCast(pid), bootstrap_path, payload_path) catch |err| {
+        linux.inject(allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name) catch |err| {
             std.debug.print("Injection failed: {}\n", .{err});
             return 1;
         };

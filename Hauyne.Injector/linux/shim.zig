@@ -16,6 +16,8 @@ pub const PayloadShimOff: usize = 0x600; // dlopen + dlsym + hauyne_start
 pub fn buildScratchPage(
     so_path: []const u8,
     payload_path: ?[]const u8,
+    type_name: ?[]const u8,
+    method_name: ?[]const u8,
     dlopen_addr: usize,
     dlsym_addr: usize,
     pthread_create_addr: usize,
@@ -26,18 +28,25 @@ pub fn buildScratchPage(
     @memcpy(page[PathOffset .. PathOffset + so_path.len], so_path);
     page[PathOffset + so_path.len] = 0;
 
-    if (payload_path) |pp| {
-        @memcpy(page[PayloadOffset .. PayloadOffset + pp.len], pp);
-        page[PayloadOffset + pp.len] = 0;
+    {
+        var p: usize = PayloadOffset;
+        if (payload_path) |pp| { @memcpy(page[p .. p + pp.len], pp); p += pp.len; }
+        page[p] = 0; p += 1;
+        if (type_name) |tn| { @memcpy(page[p .. p + tn.len], tn); p += tn.len; }
+        page[p] = 0; p += 1;
+        if (method_name) |mn| { @memcpy(page[p .. p + mn.len], mn); p += mn.len; }
+        page[p] = 0;
     }
 
     const symbol = "hauyne_start";
     @memcpy(page[SymbolOffset .. SymbolOffset + symbol.len], symbol);
     page[SymbolOffset + symbol.len] = 0;
 
+    const any_custom = payload_path != null or type_name != null or method_name != null;
+
     const pthread_handle_addr: u64 = @intCast(scratch_base); // 8 bytes at offset 0
     const path_addr: u64 = @intCast(scratch_base + PathOffset);
-    const payload_addr: u64 = if (payload_path != null) @intCast(scratch_base + PayloadOffset) else 0;
+    const payload_addr: u64 = if (any_custom) @intCast(scratch_base + PayloadOffset) else 0;
     const symbol_addr: u64 = @intCast(scratch_base + SymbolOffset);
     const payload_shim_addr: u64 = @intCast(scratch_base + PayloadShimOff);
 
