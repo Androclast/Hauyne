@@ -4,10 +4,9 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Semver tag.'
-        required: false
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -16,39 +15,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Detect .NET versions
+        id: versions
+        run: |
+          RAW=$(grep '<Versions>' Directory.Build.props | sed 's/.*<Versions>//;s/<.*//')
+          echo "raw=$RAW" >> $GITHUB_OUTPUT
+          echo "dotnet<<EOF" >> $GITHUB_OUTPUT
+          echo "$RAW" | tr ';' '\n' | sed 's/net//;s/$/.x/' >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: ${{ steps.versions.outputs.dotnet }}
 
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
 
-      - name: Build all targets
+      - name: Build
         run: ./build.sh
 
       - name: Package artifacts
         run: |
           mkdir -p dist
 
-          for target in x86_64-linux-gnu x86_64-linux-musl; do
-            dir="bin/$target"
-            tar -czf "dist/hauyne-$target.tar.gz" \
-              -C bin \
-              "$target/Hauyne.Injector" \
-              "$target/libHauyne.Bootstrap.so" \
-              "$target/Hauyne.Payload.dll" \
-              --transform="s|$target/||"
-          done
+          for dotnet in $(echo "${{ steps.versions.outputs.raw }}" | tr ';' ' '); do
+            for target in x86_64-linux-gnu x86_64-linux-musl x86_64-windows-gnu; do
+              staging="dist/staging"
+              mkdir -p "$staging"
 
-          target=x86_64-windows-gnu
-          dir="bin/$target"
-          (cd bin && zip -j "../dist/hauyne-$target.zip" \
-            "$target/Hauyne.Injector.exe" \
-            "$target/Hauyne.Bootstrap.dll" \
-            "$target/Hauyne.Payload.dll")
+              case "$target" in
+                *windows*) cp "bin/$target/Hauyne.Injector.exe" "bin/$target/Hauyne.Bootstrap.dll" "$staging/" ;;
+                *)         cp "bin/$target/Hauyne.Injector" "bin/$target/libHauyne.Bootstrap.so" "$staging/" ;;
+              esac
+              cp "bin/$dotnet/Hauyne.Payload.dll" "$staging/"
+
+              case "$target" in
+                *windows*) (cd "$staging" && zip -j "../hauyne-$target-$dotnet.zip" *) ;;
+                *)         tar -czf "dist/hauyne-$target-$dotnet.tar.gz" -C "$staging" . ;;
+              esac
+              rm -rf "$staging"
+            done
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

@@ -7,8 +7,11 @@ on:
     branches: [master]
 
 jobs:
-  linux-larp:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dotnet: ['9.0', '10.0']
 
     steps:
       - uses: actions/checkout@v4
@@ -16,7 +19,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: ${{ matrix.dotnet }}.x
 
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
@@ -24,10 +27,13 @@ jobs:
           version: 0.16.0
 
       - name: Build
-        run: ./build.sh --zig-targets "x86_64-linux-gnu"
+        run: ./build.sh --zig-targets "x86_64-linux-gnu" --no-dotnet
+
+      - name: Build payload
+        run: dotnet build Hauyne.Payload -c Release -p:TargetFramework=net${{ matrix.dotnet }} --nologo
 
       - name: Build victim
-        run: dotnet build Hauyne.Victim -c Release --nologo
+        run: dotnet build Hauyne.Victim -c Release -p:TargetFramework=net${{ matrix.dotnet }} --nologo
 
       - name: Test
         run: |
@@ -35,23 +41,23 @@ jobs:
 
           rm -f /tmp/Hauyne.txt /tmp/hauyne-victim.pid
 
-          dotnet exec Hauyne.Victim/bin/Release/net9.0/Hauyne.Victim.dll &
+          dotnet exec Hauyne.Victim/bin/Release/net${{ matrix.dotnet }}/Hauyne.Victim.dll &
           sleep 3
 
           VICTIM_PID=$(cat /tmp/hauyne-victim.pid)
-          echo "Victim PID: $VICTIM_PID"
+          echo "Victim PID: $VICTIM_PID (net${{ matrix.dotnet }})"
 
           grep -q libhostfxr /proc/$VICTIM_PID/maps
 
-          ./bin/Hauyne.Injector "$VICTIM_PID"
+          ./bin/Hauyne.Injector "$VICTIM_PID" "$PWD/bin/net${{ matrix.dotnet }}/Hauyne.Payload.dll"
 
           sleep 3
 
           if [ -f /tmp/Hauyne.txt ]; then
-            echo "$(cat /tmp/Hauyne.txt)"
+            echo "PASS: $(cat /tmp/Hauyne.txt)"
           else
-            echo "FUCK"
-            cat bin/x86_64-linux-gnu/hauyne.log 2>/dev/null || true
+            echo "FUCK! Bootstrap log:"
+            find bin -name 'hauyne.log' -exec cat {} \; 2>/dev/null || true
             exit 1
           fi
 

@@ -117,13 +117,21 @@ build_dotnet() {
 
 # Bootstrap resolves Hauyne.Payload.dll relative to its own .so directory (dladdr),
 # so symlink the payload into each per-target subdir.
+# Multi-target build puts payloads in bin/net9.0/ and bin/net10.0/
 payload() {
     (( DO_ZIG )) || return 0
+    local payload=""
+    for tfm in net10.0 net9.0; do
+        if [[ -f "$BIN_DIR/$tfm/Hauyne.Payload.dll" ]]; then
+            payload="$tfm/Hauyne.Payload.dll"
+            break
+        fi
+    done
+    [[ -n "$payload" ]] || return 0
     for target in "${ZIG_TARGETS[@]}"; do
         local dest="$BIN_DIR/$target"
         [[ -d "$dest" ]] || continue
-        [[ -f "$BIN_DIR/Hauyne.Payload.dll" ]] || continue
-        ln -sfn "../Hauyne.Payload.dll" "$dest/Hauyne.Payload.dll"
+        ln -sfn "../$payload" "$dest/Hauyne.Payload.dll"
     done
 }
 
