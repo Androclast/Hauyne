@@ -6,12 +6,12 @@
 
 const std = @import("std");
 
-pub const ScratchSize: usize = 0x2000;    // 8 KiB (two pages)
-pub const PathOffset: usize = 0x40;       // bootstrap .so path           (budget 1984)
-pub const PayloadOffset: usize = 0x800;   // payload triple, NUL-separated (budget 4096)
-pub const SymbolOffset: usize = 0x1800;   // "hauyne_start\0"             (budget 256)
-pub const VictimShimOff: usize = 0x1900;  // pthread_create + pthread_detach (budget 256)
-pub const PayloadShimOff: usize = 0x1A00; // dlopen + dlsym + hauyne_start  (budget 1536)
+pub const ScratchSize: usize = 0x2000; // 8 KiB (two pages)
+pub const PathOffset: usize = 0x40; // bootstrap .so path           (1984)
+pub const PayloadOffset: usize = 0x800; // payload triple, NUL-separated (4096)
+pub const SymbolOffset: usize = 0x1800; // "hauyne_start\0"             (256)
+pub const VictimShimOff: usize = 0x1900; // pthread_create + pthread_detach (256)
+pub const PayloadShimOff: usize = 0x1A00; // dlopen + dlsym + hauyne_start  (1536)
 
 pub fn buildScratchPage(
     so_path: []const u8,
@@ -31,11 +31,22 @@ pub fn buildScratchPage(
 
     {
         var p: usize = PayloadOffset;
-        if (payload_path) |pp| { @memcpy(page[p .. p + pp.len], pp); p += pp.len; }
-        page[p] = 0; p += 1;
-        if (type_name) |tn| { @memcpy(page[p .. p + tn.len], tn); p += tn.len; }
-        page[p] = 0; p += 1;
-        if (method_name) |mn| { @memcpy(page[p .. p + mn.len], mn); p += mn.len; }
+        if (payload_path) |pp| {
+            @memcpy(page[p .. p + pp.len], pp);
+            p += pp.len;
+        }
+        page[p] = 0;
+        p += 1;
+        if (type_name) |tn| {
+            @memcpy(page[p .. p + tn.len], tn);
+            p += tn.len;
+        }
+        page[p] = 0;
+        p += 1;
+        if (method_name) |mn| {
+            @memcpy(page[p .. p + mn.len], mn);
+            p += mn.len;
+        }
         page[p] = 0;
     }
 
@@ -64,6 +75,7 @@ pub fn buildScratchPage(
     //   48 B8 [imm64 pthread_detach]   mov rax, pthread_detach
     //   FF D0                          call rax                ; reap stack/TCB after the worker exits
     //   CC                             int3                    ; troleo completado, return
+    // zig fmt: off
     {
         var o: usize = VictimShimOff;
         page[o] = 0xF3; o += 1; page[o] = 0x0F; o += 1; page[o] = 0x1E; o += 1; page[o] = 0xFA; o += 1;
@@ -80,6 +92,7 @@ pub fn buildScratchPage(
         page[o] = 0xFF; o += 1; page[o] = 0xD0; o += 1;
         page[o] = 0xCC;
     }
+    // zig fmt: on
 
     //   F3 0F 1E FA                    endbr64
     //   48 83 EC 08                    sub rsp, 8              ; align to 16
@@ -101,6 +114,7 @@ pub fn buildScratchPage(
     //   48 83 C4 08                    add rsp, 8
     //   31 C0                          xor eax, eax
     //   C3                             ret
+    // zig fmt: off
     {
         var o: usize = PayloadShimOff;
         page[o] = 0xF3; o += 1; page[o] = 0x0F; o += 1; page[o] = 0x1E; o += 1; page[o] = 0xFA; o += 1;
@@ -123,6 +137,7 @@ pub fn buildScratchPage(
         page[o] = 0x31; o += 1; page[o] = 0xC0; o += 1;
         page[o] = 0xC3;
     }
+    // zig fmt: on
 
     return page;
 }
