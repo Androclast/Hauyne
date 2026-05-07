@@ -7,7 +7,7 @@ on:
     branches: [master]
 
 jobs:
-  linux-smoke-test:
+  linux-larp:
     runs-on: ubuntu-latest
 
     steps:

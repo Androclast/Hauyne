@@ -49,7 +49,8 @@ fn detectLinux(out: []u8) ?[]const u8 {
         if (n == 0) break;
         total += n;
     }
-    return extractVersion(maps_buf[0..total], "/libhostfxr.so", '/', out);
+    return extractVersion(maps_buf[0..total], "/libcoreclr.so", '/', out) orelse
+        extractVersion(maps_buf[0..total], "/libhostfxr.so", '/', out);
 }
 
 fn detectWindows(out: []u8) ?[]const u8 {
