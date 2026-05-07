@@ -5,44 +5,113 @@
 // Mozilla Public License, v. 2.0.
 
 const std = @import("std");
-
-const RTLD_NOW: c_int = 0x2;
-
-extern "c" fn dlopen(filename: ?[*:0]const u8, flags: c_int) callconv(std.builtin.CallingConvention.c) ?*anyopaque;
-extern "c" fn dlsym(handle: ?*anyopaque, symbol: [*:0]const u8) callconv(std.builtin.CallingConvention.c) ?*anyopaque;
+const elf = std.elf;
 
 const MapsRow = struct {
     start: usize,
-    end: usize,
     offset: []const u8,
     path: []const u8,
 };
 
+const exacts = [_][]const u8{ "libc.so.6", "libpthread.so.0", "libdl.so.2" };
+const prefix = [_][]const u8{"libc.musl-"};
+
 pub fn findSymbolInTarget(allocator: std.mem.Allocator, pid: i32, symbol: []const u8) !usize {
-    const lib_handle = dlopen("libc.so.6", RTLD_NOW) orelse dlopen("libc", RTLD_NOW) orelse return error.DlopenFailed;
+    const maps_path = try std.fmt.allocPrint(allocator, "/proc/{d}/maps", .{pid});
+    defer allocator.free(maps_path);
 
-    const sym_z = try allocator.dupeZ(u8, symbol);
-    defer allocator.free(sym_z);
+    const maps_text = try std.fs.cwd().readFileAlloc(allocator, maps_path, 16 * 1024 * 1024);
+    defer allocator.free(maps_text);
 
-    const our_sym = dlsym(lib_handle, sym_z) orelse return error.DlsymFailed;
-    const our_sym_addr: usize = @intFromPtr(our_sym);
+    var lines = std.mem.splitScalar(u8, maps_text, '\n');
+    while (lines.next()) |line| {
+        const row = parseMapsRow(line) orelse continue;
+        if (!std.mem.eql(u8, row.offset, "00000000")) continue;
+        if (!isLibcCandidate(std.fs.path.basename(row.path))) continue;
 
-    const self_maps = try std.fs.cwd().readFileAlloc(allocator, "/proc/self/maps", 16 * 1024 * 1024);
-    defer allocator.free(self_maps);
+        const data = readTargetFile(allocator, pid, row.path) catch continue;
+        defer allocator.free(data);
 
-    const our_base, const lib_path = findLoadBase(self_maps, our_sym_addr) orelse return error.SymbolMappingNotFound;
+        const sym_off = lookupDynsym(data, symbol) catch |err| switch (err) {
+            error.SymbolNotFound => continue,
+            else => return err,
+        };
+        return row.start + sym_off;
+    }
+    return error.SymbolNotFound;
+}
 
-    const lib_name = std.fs.path.basename(lib_path);
+fn isLibcCandidate(basename: []const u8) bool {
+    inline for (exacts) |c| {
+        if (std.mem.eql(u8, basename, c)) return true;
+    }
+    inline for (prefix) |c| {
+        if (std.mem.startsWith(u8, basename, c)) return true;
+    }
+    return false;
+}
 
-    const target_maps_path = try std.fmt.allocPrint(allocator, "/proc/{d}/maps", .{pid});
-    defer allocator.free(target_maps_path);
+fn readTargetFile(allocator: std.mem.Allocator, pid: i32, path: []const u8) ![]u8 {
+    const ns_path = try std.fmt.allocPrint(allocator, "/proc/{d}/root{s}", .{ pid, path });
+    defer allocator.free(ns_path);
+    return std.fs.cwd().readFileAlloc(allocator, ns_path, 32 * 1024 * 1024);
+}
 
-    const target_maps = try std.fs.cwd().readFileAlloc(allocator, target_maps_path, 16 * 1024 * 1024);
-    defer allocator.free(target_maps);
+fn lookupDynsym(data: []const u8, symbol: []const u8) !u64 {
+    if (data.len < @sizeOf(elf.Elf64_Ehdr)) return error.TruncatedElf;
+    if (!std.mem.eql(u8, data[0..4], "\x7fELF")) return error.NotElf;
+    if (data[elf.EI_CLASS] != elf.ELFCLASS64) return error.UnsupportedElfClass;
 
-    const target_base = findLoadBaseByName(target_maps, lib_name) orelse return error.LibNotFoundInTarget;
+    const ehdr = std.mem.bytesAsValue(elf.Elf64_Ehdr, data[0..@sizeOf(elf.Elf64_Ehdr)]);
 
-    return target_base + (our_sym_addr - our_base);
+    const first_load_vaddr: u64 = blk: {
+        var i: u16 = 0;
+        while (i < ehdr.e_phnum) : (i += 1) {
+            const off: usize = @intCast(ehdr.e_phoff + @as(u64, i) * ehdr.e_phentsize);
+            if (off + @sizeOf(elf.Elf64_Phdr) > data.len) return error.TruncatedElf;
+            const phdr = std.mem.bytesAsValue(elf.Elf64_Phdr, data[off..][0..@sizeOf(elf.Elf64_Phdr)]);
+            if (phdr.p_type == elf.PT_LOAD) break :blk phdr.p_vaddr;
+        }
+        return error.NoLoadSegment;
+    };
+
+    const dynsym = (try findShdrByType(data, ehdr, elf.SHT_DYNSYM)) orelse return error.NoDynsym;
+    if (dynsym.sh_entsize < @sizeOf(elf.Elf64_Sym)) return error.NoDynsym;
+    if (dynsym.sh_offset + dynsym.sh_size > data.len) return error.TruncatedElf;
+
+    const strtab = blk: {
+        const off: usize = @intCast(ehdr.e_shoff + @as(u64, dynsym.sh_link) * ehdr.e_shentsize);
+        if (off + @sizeOf(elf.Elf64_Shdr) > data.len) return error.TruncatedElf;
+        const shdr = std.mem.bytesAsValue(elf.Elf64_Shdr, data[off..][0..@sizeOf(elf.Elf64_Shdr)]);
+        const start: usize = @intCast(shdr.sh_offset);
+        const len: usize = @intCast(shdr.sh_size);
+        if (start + len > data.len) return error.TruncatedElf;
+        break :blk data[start..][0..len];
+    };
+
+    const sym_count = dynsym.sh_size / dynsym.sh_entsize;
+    var i: u64 = 0;
+    while (i < sym_count) : (i += 1) {
+        const sym_off: usize = @intCast(dynsym.sh_offset + i * dynsym.sh_entsize);
+        const sym = std.mem.bytesAsValue(elf.Elf64_Sym, data[sym_off..][0..@sizeOf(elf.Elf64_Sym)]);
+        if (sym.st_value == 0) continue;
+        if ((sym.st_info & 0xf) != elf.STT_FUNC) continue;
+        if (sym.st_name >= strtab.len) continue;
+        const name = std.mem.sliceTo(strtab[sym.st_name..], 0);
+        if (std.mem.eql(u8, name, symbol)) return sym.st_value - first_load_vaddr;
+    }
+    return error.SymbolNotFound;
+}
+
+fn findShdrByType(data: []const u8, ehdr: *align(1) const elf.Elf64_Ehdr, sh_type: u32) !?elf.Elf64_Shdr {
+    var i: u16 = 0;
+    while (i < ehdr.e_shnum) : (i += 1) {
+        const off: usize = @intCast(ehdr.e_shoff + @as(u64, i) * ehdr.e_shentsize);
+        if (off + @sizeOf(elf.Elf64_Shdr) > data.len) return error.TruncatedElf;
+        const shdr = std.mem.bytesAsValue(elf.Elf64_Shdr, data[off..][0..@sizeOf(elf.Elf64_Shdr)]);
+        if (shdr.sh_type == sh_type) return shdr.*;
+    }
+    return null;
 }
 
 fn parseMapsRow(line: []const u8) ?MapsRow {
@@ -66,49 +135,7 @@ fn parseMapsRow(line: []const u8) ?MapsRow {
 
     var range_it = std.mem.splitScalar(u8, range_str, '-');
     const start_s = range_it.next() orelse return null;
-    const end_s = range_it.next() orelse return null;
     const start = std.fmt.parseInt(usize, start_s, 16) catch return null;
-    const end = std.fmt.parseInt(usize, end_s, 16) catch return null;
 
-    return .{ .start = start, .end = end, .offset = offset_str, .path = path_str };
-}
-
-fn findLoadBase(maps_text: []const u8, contained_addr: usize) ?struct { usize, []const u8 } {
-    var matched_path: ?[]const u8 = null;
-    var segment_base: usize = 0;
-
-    var lines = std.mem.splitScalar(u8, maps_text, '\n');
-    while (lines.next()) |line| {
-        const row = parseMapsRow(line) orelse continue;
-        if (contained_addr >= row.start and contained_addr < row.end) {
-            matched_path = row.path;
-            segment_base = row.start;
-            break;
-        }
-    }
-
-    const mp = matched_path orelse return null;
-
-    var lines2 = std.mem.splitScalar(u8, maps_text, '\n');
-    while (lines2.next()) |line| {
-        const row = parseMapsRow(line) orelse continue;
-        if (!std.mem.eql(u8, row.path, mp)) continue;
-        if (std.mem.eql(u8, row.offset, "00000000")) {
-            return .{ row.start, mp };
-        }
-    }
-
-    return .{ segment_base, mp };
-}
-
-fn findLoadBaseByName(maps_text: []const u8, lib_file_name: []const u8) ?usize {
-    var lines = std.mem.splitScalar(u8, maps_text, '\n');
-    while (lines.next()) |line| {
-        const row = parseMapsRow(line) orelse continue;
-        if (!std.mem.eql(u8, std.fs.path.basename(row.path), lib_file_name)) continue;
-        if (std.mem.eql(u8, row.offset, "00000000")) {
-            return row.start;
-        }
-    }
-    return null;
+    return .{ .start = start, .offset = offset_str, .path = path_str };
 }
