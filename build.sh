@@ -5,7 +5,7 @@
 #   ./build.sh --no-zig                       # skip bootstrap + injector build
 #   ./build.sh --no-dotnet                    # skip Payload build
 #   ./build.sh --zig-targets "x86_64-linux-gnu x86_64-windows-gnu"
-#   CONFIG=Debug OPTIMIZE=Debug ./build.sh    # debug build both sides
+#   CONFIG=Debug OPTIMIZE=Debug INJECTOR_OPTIMIZE=Debug ./build.sh
 
 set -euo pipefail
 
@@ -19,6 +19,7 @@ BIN_DIR="$REPO_ROOT/bin"
 
 CONFIG="${CONFIG:-Release}"
 OPTIMIZE="${OPTIMIZE:-ReleaseFast}"
+INJECTOR_OPTIMIZE="${INJECTOR_OPTIMIZE:-ReleaseSmall}"
 
 DEFAULT_ZIG_TARGETS=(
     x86_64-linux-gnu
@@ -54,7 +55,7 @@ missing=0
 (( DO_DOTNET )) && { check_tool dotnet dotnet "dotnet --version" || missing=1; }
 (( missing )) && exit 1
 
-echo "  CONFIG=$CONFIG   OPTIMIZE=$OPTIMIZE"
+echo "  CONFIG=$CONFIG   OPTIMIZE=$OPTIMIZE   INJECTOR_OPTIMIZE=$INJECTOR_OPTIMIZE"
 (( DO_ZIG )) && echo "  ZIG_TARGETS=${ZIG_TARGETS[*]}"
 
 bootstrap_artifact_for() {
@@ -80,8 +81,8 @@ build_zig() {
         echo "==> zig bootstrap $target ($OPTIMIZE)"
         ( cd "$BOOTSTRAP_DIR" && zig build -Dtarget="$target" -Doptimize="$OPTIMIZE" )
 
-        echo "==> zig injector $target ($OPTIMIZE)"
-        ( cd "$INJECTOR_DIR" && zig build -Dtarget="$target" -Doptimize="$OPTIMIZE" )
+        echo "==> zig injector $target ($INJECTOR_OPTIMIZE)"
+        ( cd "$INJECTOR_DIR" && zig build -Dtarget="$target" -Doptimize="$INJECTOR_OPTIMIZE" )
 
         local dest_dir
         dest_dir="$BIN_DIR/$target"
