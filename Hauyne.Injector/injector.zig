@@ -23,9 +23,24 @@ pub fn main(init: std.process.Init) u8 {
 
     const args = init.minimal.args.toSlice(allocator) catch return 1;
 
-    if (args.len < 2) {
-        std.debug.print("Usage: {s} <process-name|pid> [payload-path] [--type <name>] [--method <name>]\n", .{args[0]});
-        return 1;
+    if (args.len < 2 or std.mem.eql(u8, args[1], "--help") or std.mem.eql(u8, args[1], "-h")) {
+        const usage =
+            \\Usage: {s} <process-name|pid> [payload-path] [options]
+            \\
+            \\Inject a managed .NET DLL into a running .NET 5+ process.
+            \\
+            \\Arguments:
+            \\  <process-name|pid>    Target process name or PID
+            \\  [payload-path]        Path to payload DLL (default: Hauyne.Payload.dll next to bootstrap)
+            \\
+            \\Options:
+            \\  --type <name>         Fully qualified type name (default: Hauyne.Payload.Entrypoint, Hauyne.Payload)
+            \\  --method <name>       Entry method name (default: Initialize)
+            \\  -h, --help            Hello
+            \\
+        ;
+        println(allocator, usage, .{args[0]});
+        return if (args.len < 2) 1 else 0;
     }
 
     const process_spec = args[1];
@@ -246,8 +261,11 @@ fn collectMatchesWindows(name: []const u8, out: []u32, count: *usize) !void {
     });
     const self_pid = GetCurrentProcessId();
 
-    const kernel32 = windows.kernel32;
-    const snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    const CreateToolhelp32Snapshot = @extern(*const fn (windows.DWORD, windows.DWORD) callconv(.winapi) windows.HANDLE, .{
+        .name = "CreateToolhelp32Snapshot",
+        .library_name = "kernel32",
+    });
+    const snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == windows.INVALID_HANDLE_VALUE) return error.SnapshotFailed;
     defer _ = windows.CloseHandle(snapshot);
 
@@ -263,11 +281,11 @@ fn collectMatchesWindows(name: []const u8, out: []u32, count: *usize) !void {
         .library_name = "kernel32",
     });
 
-    if (Process32FirstW(snapshot, &entry) == 0) return;
+    if (Process32FirstW(snapshot, &entry) == .FALSE) return;
 
     while (true) {
         if (entry.th32ProcessID == self_pid) {
-            if (Process32NextW(snapshot, &entry) == 0) break;
+            if (Process32NextW(snapshot, &entry) == .FALSE) break;
             continue;
         }
 
@@ -287,7 +305,7 @@ fn collectMatchesWindows(name: []const u8, out: []u32, count: *usize) !void {
             count.* += 1;
         }
 
-        if (Process32NextW(snapshot, &entry) == 0) break;
+        if (Process32NextW(snapshot, &entry) == .FALSE) break;
     }
 }
 
@@ -341,7 +359,7 @@ fn isDotNetProcessWindows(pid: u32) bool {
         .library_name = "kernel32",
     });
 
-    const handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid) orelse return false;
+    const handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, windows.BOOL.FALSE, pid) orelse return false;
     defer _ = windows.CloseHandle(handle);
 
     const EnumProcessModules = @extern(*const fn (windows.HANDLE, [*]?windows.HMODULE, windows.DWORD, *windows.DWORD) callconv(.winapi) windows.BOOL, .{
@@ -357,7 +375,7 @@ fn isDotNetProcessWindows(pid: u32) bool {
     var modules: [1024]?windows.HMODULE = undefined;
     var needed: windows.DWORD = 0;
 
-    if (EnumProcessModules(handle, &modules, @sizeOf(@TypeOf(modules)), &needed) == 0) return false;
+    if (EnumProcessModules(handle, &modules, @sizeOf(@TypeOf(modules)), &needed) == .FALSE) return false;
 
     const count = needed / @sizeOf(?windows.HMODULE);
     var i: usize = 0;

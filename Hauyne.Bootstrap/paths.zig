@@ -23,10 +23,29 @@ pub fn litCharT(comptime s: [:0]const u8) [*:0]const CharT {
 }
 
 pub fn appendLog(log_path: []const u8, msg: []const u8) void {
-    const fd = std.posix.openat(std.posix.AT.FDCWD, log_path, .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }, 0o644) catch return;
-    defer _ = std.c.close(fd);
-    _ = std.c.write(fd, msg.ptr, msg.len);
-    _ = std.c.write(fd, "\n".ptr, 1);
+    if (is_windows) {
+        const CC = std.builtin.CallingConvention.c;
+        const CreateFileW = @extern(*const fn ([*:0]const u16, u32, u32, ?*anyopaque, u32, u32, ?*anyopaque) callconv(CC) ?*anyopaque, .{ .name = "CreateFileW", .library_name = "kernel32" });
+        const WriteFile = @extern(*const fn (*anyopaque, [*]const u8, u32, ?*u32, ?*anyopaque) callconv(CC) i32, .{ .name = "WriteFile", .library_name = "kernel32" });
+        const SetFilePointer = @extern(*const fn (*anyopaque, i32, ?*i32, u32) callconv(CC) u32, .{ .name = "SetFilePointer", .library_name = "kernel32" });
+        const CloseHandle = @extern(*const fn (*anyopaque) callconv(CC) i32, .{ .name = "CloseHandle", .library_name = "kernel32" });
+
+        var path_w: [512]u16 = undefined;
+        if (log_path.len >= path_w.len) return;
+        for (log_path, 0..) |c, i| path_w[i] = c;
+        path_w[log_path.len] = 0;
+        const h = CreateFileW(@ptrCast(&path_w), 0x40000000, 0, null, 4, 0x80, null) orelse return;
+        defer _ = CloseHandle(h);
+        _ = SetFilePointer(h, 0, null, 2);
+        var written: u32 = 0;
+        _ = WriteFile(h, msg.ptr, @intCast(msg.len), &written, null);
+        _ = WriteFile(h, "\n".ptr, 1, &written, null);
+    } else {
+        const fd = std.posix.openat(std.posix.AT.FDCWD, log_path, .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }, 0o644) catch return;
+        defer _ = std.c.close(fd);
+        _ = std.c.write(fd, msg.ptr, msg.len);
+        _ = std.c.write(fd, "\n".ptr, 1);
+    }
 }
 
 pub fn charTLen(ptr: [*:0]const CharT) usize {

@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Semver tag.'
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build all targets
+        run: ./build.sh
+
+      - name: Package artifacts
+        run: |
+          mkdir -p dist
+
+          for target in x86_64-linux-gnu x86_64-linux-musl; do
+            dir="bin/$target"
+            tar -czf "dist/hauyne-$target.tar.gz" \
+              -C bin \
+              "$target/Hauyne.Injector" \
+              "$target/libHauyne.Bootstrap.so" \
+              "$target/Hauyne.Payload.dll" \
+              --transform="s|$target/||"
+          done
+
+          target=x86_64-windows-gnu
+          dir="bin/$target"
+          (cd bin && zip -j "../dist/hauyne-$target.zip" \
+            "$target/Hauyne.Injector.exe" \
+            "$target/Hauyne.Bootstrap.dll" \
+            "$target/Hauyne.Payload.dll")
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hauyne-binaries
+          path: dist/
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* \
+            --title "${{ github.ref_name }}" \
+            --generate-notes

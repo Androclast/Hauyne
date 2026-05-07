@@ -164,7 +164,7 @@ const platform_entry = if (t.is_windows) struct {
             g_hModule = hModule;
             _ = win.DisableThreadLibraryCalls(hModule);
         }
-        return 1;
+        return win.BOOL.TRUE;
     }
 
     pub export fn hauyne_start(param: ?*anyopaque) callconv(t.CC) win.DWORD {

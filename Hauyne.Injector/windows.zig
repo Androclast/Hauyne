@@ -72,7 +72,7 @@ pub fn inject(
 
     const hProcess = OpenProcess(
         PROCESS_CREATE_THREAD | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ | PROCESS_QUERY_INFORMATION,
-        0,
+        BOOL.FALSE,
         pid,
     ) orelse return error.OpenProcessFailed;
     defer _ = CloseHandle(hProcess);
@@ -86,7 +86,7 @@ pub fn inject(
     ) orelse return error.VirtualAllocExFailed;
     defer _ = VirtualFreeEx(hProcess, bs_remote, 0, MEM_RELEASE);
 
-    if (WriteProcessMemory(hProcess, bs_remote, path_bytes.ptr, path_bytes.len, null) == 0)
+    if (WriteProcessMemory(hProcess, bs_remote, path_bytes.ptr, path_bytes.len, null) == .FALSE)
         return error.WriteProcessMemoryFailed;
 
     var payload_remote: ?LPVOID = null;
@@ -104,7 +104,7 @@ pub fn inject(
             MEM_COMMIT | MEM_RESERVE,
             PAGE_READWRITE,
         ) orelse return error.VirtualAllocExFailed;
-        if (WriteProcessMemory(hProcess, payload_remote.?, triple_bytes.ptr, triple_bytes.len, null) == 0)
+        if (WriteProcessMemory(hProcess, payload_remote.?, triple_bytes.ptr, triple_bytes.len, null) == .FALSE)
             return error.WriteProcessMemoryFailed;
     }
 
@@ -166,7 +166,7 @@ fn findBootstrapBaseInTarget(pid: DWORD, bootstrap_path: []const u8) !usize {
     var entry: MODULEENTRY32W = undefined;
     entry.dwSize = @sizeOf(MODULEENTRY32W);
 
-    if (Module32FirstW(snapshot, &entry) == 0) return error.Module32FirstFailed;
+    if (Module32FirstW(snapshot, &entry) == .FALSE) return error.Module32FirstFailed;
 
     while (true) {
         const name_len = std.mem.indexOfScalar(u16, &entry.szModule, 0) orelse entry.szModule.len;
@@ -178,7 +178,7 @@ fn findBootstrapBaseInTarget(pid: DWORD, bootstrap_path: []const u8) !usize {
             if (entry.modBaseAddr) |base| return @intFromPtr(base);
         }
 
-        if (Module32NextW(snapshot, &entry) == 0) break;
+        if (Module32NextW(snapshot, &entry) == .FALSE) break;
     }
 
     return error.BootstrapModuleNotFound;
