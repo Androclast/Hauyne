@@ -44,10 +44,11 @@ pub fn inject(
     const dlopen_addr = try symbols.findSymbolInTarget(allocator, tgid, "dlopen");
     const dlsym_addr = try symbols.findSymbolInTarget(allocator, tgid, "dlsym");
     const pthread_create_addr = try symbols.findSymbolInTarget(allocator, tgid, "pthread_create");
+    const pthread_detach_addr = try symbols.findSymbolInTarget(allocator, tgid, "pthread_detach");
 
     std.debug.print("[hauyne] victim tid={d} (tgid={d})\n", .{ victim, tgid });
     if (debug) {
-        std.debug.print("[hauyne] dlopen=0x{x} dlsym=0x{x} pthread_create=0x{x}\n", .{ dlopen_addr, dlsym_addr, pthread_create_addr });
+        std.debug.print("[hauyne] dlopen=0x{x} dlsym=0x{x} pthread_create=0x{x} pthread_detach=0x{x}\n", .{ dlopen_addr, dlsym_addr, pthread_create_addr, pthread_detach_addr });
     }
 
     if (ptrace_mod.ptrace(ptrace_mod.PTRACE_SEIZE, victim, 0, 0) < 0) return error.PtraceSeizeFailed;
@@ -80,7 +81,7 @@ pub fn inject(
     const scratch = try bootstrapMmap(victim, saved);
     if (debug) std.debug.print("[hauyne] scratch=0x{x}\n", .{scratch});
 
-    var page = shim.buildScratchPage(so_path, payload_path, type_name, method_name, dlopen_addr, dlsym_addr, pthread_create_addr, scratch);
+    var page = shim.buildScratchPage(so_path, payload_path, type_name, method_name, dlopen_addr, dlsym_addr, pthread_create_addr, pthread_detach_addr, scratch);
     try ptrace_mod.writeMemory(victim, scratch, &page);
 
     try runVictimShim(victim, saved, scratch + shim.VictimShimOff);

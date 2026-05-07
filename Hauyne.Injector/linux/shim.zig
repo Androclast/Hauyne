@@ -6,12 +6,12 @@
 
 const std = @import("std");
 
-pub const ScratchSize: usize = 4096;
-pub const PathOffset: usize = 0x40;      // bootstrap .so path
-pub const PayloadOffset: usize = 0x200;  // payload .dll path (zero-terminated; empty -> fallback)
-pub const SymbolOffset: usize = 0x380;   // "hauyne_start\0"
-pub const VictimShimOff: usize = 0x400;  // calls pthread_create
-pub const PayloadShimOff: usize = 0x600; // dlopen + dlsym + hauyne_start
+pub const ScratchSize: usize = 0x2000;    // 8 KiB (two pages)
+pub const PathOffset: usize = 0x40;       // bootstrap .so path           (budget 1984)
+pub const PayloadOffset: usize = 0x800;   // payload triple, NUL-separated (budget 4096)
+pub const SymbolOffset: usize = 0x1800;   // "hauyne_start\0"             (budget 256)
+pub const VictimShimOff: usize = 0x1900;  // pthread_create + pthread_detach (budget 256)
+pub const PayloadShimOff: usize = 0x1A00; // dlopen + dlsym + hauyne_start  (budget 1536)
 
 pub fn buildScratchPage(
     so_path: []const u8,
@@ -21,6 +21,7 @@ pub fn buildScratchPage(
     dlopen_addr: usize,
     dlsym_addr: usize,
     pthread_create_addr: usize,
+    pthread_detach_addr: usize,
     scratch_base: usize,
 ) [ScratchSize]u8 {
     var page = std.mem.zeroes([ScratchSize]u8);
@@ -52,12 +53,16 @@ pub fn buildScratchPage(
 
     //   F3 0F 1E FA                    endbr64                 ; So that CET doesn't fuck me
     //   48 83 E4 F0                    and rsp, -16            ; 16-byte align
-    //   48 BF [imm64 thread_handle]    mov rdi, thread_handle
+    //   48 BF [imm64 thread_handle]    mov rdi, &thread_handle
     //   31 F6                          xor esi, esi            ; attr = NULL
     //   48 BA [imm64 payload_shim]     mov rdx, payload_shim
     //   31 C9                          xor ecx, ecx            ; arg = NULL (shim uses baked addrs)
     //   48 B8 [imm64 pthread_create]   mov rax, pthread_create
     //   FF D0                          call rax
+    //   48 BF [imm64 thread_handle]    mov rdi, &thread_handle
+    //   48 8B 3F                       mov rdi, [rdi]          ; pthread_t handle written by pthread_create
+    //   48 B8 [imm64 pthread_detach]   mov rax, pthread_detach
+    //   FF D0                          call rax                ; reap stack/TCB after the worker exits
     //   CC                             int3                    ; troleo completado, return
     {
         var o: usize = VictimShimOff;
@@ -68,6 +73,10 @@ pub fn buildScratchPage(
         page[o] = 0x48; o += 1; page[o] = 0xBA; o += 1; writeU64(&page, &o, payload_shim_addr);
         page[o] = 0x31; o += 1; page[o] = 0xC9; o += 1;
         page[o] = 0x48; o += 1; page[o] = 0xB8; o += 1; writeU64(&page, &o, @intCast(pthread_create_addr));
+        page[o] = 0xFF; o += 1; page[o] = 0xD0; o += 1;
+        page[o] = 0x48; o += 1; page[o] = 0xBF; o += 1; writeU64(&page, &o, pthread_handle_addr);
+        page[o] = 0x48; o += 1; page[o] = 0x8B; o += 1; page[o] = 0x3F; o += 1;
+        page[o] = 0x48; o += 1; page[o] = 0xB8; o += 1; writeU64(&page, &o, @intCast(pthread_detach_addr));
         page[o] = 0xFF; o += 1; page[o] = 0xD0; o += 1;
         page[o] = 0xCC;
     }
