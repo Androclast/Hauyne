@@ -81,7 +81,7 @@ pub fn main(init: std.process.Init) u8 {
         };
     } else if (builtin.os.tag == .linux) {
         const linux = @import("linux/linux.zig");
-        linux.inject(allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name) catch |err| {
+        linux.inject(io, allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name) catch |err| {
             std.debug.print("Injection failed: {}\n", .{err});
             return 1;
         };
@@ -297,17 +297,17 @@ fn isDotNetProcess(io: std.Io, allocator: std.mem.Allocator, pid: u32, inaccessi
 }
 
 fn isDotNetProcessLinux(io: std.Io, allocator: std.mem.Allocator, pid: u32, inaccessible: *usize) !bool {
+    _ = io;
     const maps_path = try std.fmt.allocPrint(allocator, "/proc/{}/maps", .{pid});
     defer allocator.free(maps_path);
 
-    const data = std.Io.Dir.cwd().readFileAlloc(io, maps_path, allocator, std.Io.Limit.limited(16 * 1024 * 1024)) catch |err| switch (err) {
-        error.AccessDenied, error.PermissionDenied => {
-            inaccessible.* += 1;
-            return false;
-        },
-        else => return false,
+    const data = readProcFileAlloc(allocator, maps_path) catch |err| {
+        switch (err) {
+            error.AccessDenied, error.PermissionDenied => inaccessible.* += 1,
+            else => {},
+        }
+        return false;
     };
-    defer allocator.free(data);
 
     var it = std.mem.splitScalar(u8, data, '\n');
     while (it.next()) |line| {
@@ -315,6 +315,19 @@ fn isDotNetProcessLinux(io: std.Io, allocator: std.mem.Allocator, pid: u32, inac
     }
 
     return false;
+}
+
+fn readProcFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0);
+    defer _ = std.c.close(fd);
+    var buf = try allocator.alloc(u8, 256 * 1024);
+    var n: usize = 0;
+    while (n < buf.len) {
+        const r = try std.posix.read(fd, buf[n..]);
+        if (r == 0) break;
+        n += r;
+    }
+    return buf[0..n];
 }
 
 fn isDotNetProcessWindows(pid: u32) bool {

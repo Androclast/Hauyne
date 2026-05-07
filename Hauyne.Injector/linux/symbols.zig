@@ -16,12 +16,11 @@ const MapsRow = struct {
 const exacts = [_][]const u8{ "libc.so.6", "libpthread.so.0", "libdl.so.2" };
 const prefix = [_][]const u8{"libc.musl-"};
 
-pub fn findSymbolInTarget(allocator: std.mem.Allocator, pid: i32, symbol: []const u8) !usize {
+pub fn findSymbolInTarget(io: std.Io, allocator: std.mem.Allocator, pid: i32, symbol: []const u8) !usize {
     const maps_path = try std.fmt.allocPrint(allocator, "/proc/{d}/maps", .{pid});
     defer allocator.free(maps_path);
 
-    const maps_text = try std.fs.cwd().readFileAlloc(allocator, maps_path, 16 * 1024 * 1024);
-    defer allocator.free(maps_text);
+    const maps_text = try readProcFileAlloc(allocator, maps_path);
 
     var lines = std.mem.splitScalar(u8, maps_text, '\n');
     while (lines.next()) |line| {
@@ -29,7 +28,7 @@ pub fn findSymbolInTarget(allocator: std.mem.Allocator, pid: i32, symbol: []cons
         if (!std.mem.eql(u8, row.offset, "00000000")) continue;
         if (!isLibcCandidate(std.fs.path.basename(row.path))) continue;
 
-        const data = readTargetFile(allocator, pid, row.path) catch continue;
+        const data = readTargetFile(io, allocator, pid, row.path) catch continue;
         defer allocator.free(data);
 
         const sym_off = lookupDynsym(data, symbol) catch |err| switch (err) {
@@ -51,10 +50,10 @@ fn isLibcCandidate(basename: []const u8) bool {
     return false;
 }
 
-fn readTargetFile(allocator: std.mem.Allocator, pid: i32, path: []const u8) ![]u8 {
+fn readTargetFile(io: std.Io, allocator: std.mem.Allocator, pid: i32, path: []const u8) ![]u8 {
     const ns_path = try std.fmt.allocPrint(allocator, "/proc/{d}/root{s}", .{ pid, path });
     defer allocator.free(ns_path);
-    return std.fs.cwd().readFileAlloc(allocator, ns_path, 32 * 1024 * 1024);
+    return std.Io.Dir.cwd().readFileAlloc(io, ns_path, allocator, std.Io.Limit.limited(32 * 1024 * 1024));
 }
 
 fn lookupDynsym(data: []const u8, symbol: []const u8) !u64 {
@@ -138,4 +137,17 @@ fn parseMapsRow(line: []const u8) ?MapsRow {
     const start = std.fmt.parseInt(usize, start_s, 16) catch return null;
 
     return .{ .start = start, .offset = offset_str, .path = path_str };
+}
+
+fn readProcFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0);
+    defer _ = std.c.close(fd);
+    var buf = try allocator.alloc(u8, 256 * 1024);
+    var n: usize = 0;
+    while (n < buf.len) {
+        const r = try std.posix.read(fd, buf[n..]);
+        if (r == 0) break;
+        n += r;
+    }
+    return buf[0..n];
 }

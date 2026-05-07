@@ -16,15 +16,15 @@ const IdleSyscalls = [_]i64{
 
 // Falls back to the main thread, but main thread holds EE locks,
 // and will probably just suicide bomb if hijacked
-pub fn pickVictimThread(allocator: std.mem.Allocator, tgid: i32) !i32 {
+pub fn pickVictimThread(io: std.Io, allocator: std.mem.Allocator, tgid: i32) !i32 {
     const task_dir = try std.fmt.allocPrint(allocator, "/proc/{d}/task", .{tgid});
     defer allocator.free(task_dir);
 
-    var dir = std.fs.openDirAbsolute(task_dir, .{ .iterate = true }) catch return tgid;
-    defer dir.close();
+    var dir = std.Io.Dir.openDirAbsolute(io, task_dir, .{ .iterate = true }) catch return tgid;
+    defer dir.close(io);
 
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         if (entry.kind != .directory) continue;
 
         const tid = std.fmt.parseInt(i32, entry.name, 10) catch continue;
@@ -33,10 +33,9 @@ pub fn pickVictimThread(allocator: std.mem.Allocator, tgid: i32) !i32 {
         const syscall_path = std.fmt.allocPrint(allocator, "/proc/{d}/task/{d}/syscall", .{ tgid, tid }) catch continue;
         defer allocator.free(syscall_path);
 
-        const syscall_text = std.fs.cwd().readFileAlloc(allocator, syscall_path, 256) catch continue;
-        defer allocator.free(syscall_text);
+        const syscall_text = readProcFileAlloc(allocator, syscall_path) catch continue;
 
-        const trimmed = std.mem.trimRight(u8, syscall_text, "\n\r \t");
+        const trimmed = std.mem.trimEnd(u8, syscall_text, "\n\r \t");
         if (std.mem.eql(u8, trimmed, "running")) continue;
 
         var parts = std.mem.splitScalar(u8, trimmed, ' ');
@@ -55,8 +54,7 @@ pub fn pickVictimThread(allocator: std.mem.Allocator, tgid: i32) !i32 {
         const status_path = std.fmt.allocPrint(allocator, "/proc/{d}/task/{d}/status", .{ tgid, tid }) catch continue;
         defer allocator.free(status_path);
 
-        const status_text = std.fs.cwd().readFileAlloc(allocator, status_path, 4096) catch continue;
-        defer allocator.free(status_text);
+        const status_text = readProcFileAlloc(allocator, status_path) catch continue;
 
         var lines = std.mem.splitScalar(u8, status_text, '\n');
         while (lines.next()) |line| {
@@ -69,4 +67,17 @@ pub fn pickVictimThread(allocator: std.mem.Allocator, tgid: i32) !i32 {
     }
 
     return tgid;
+}
+
+fn readProcFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0);
+    defer _ = std.c.close(fd);
+    var buf = try allocator.alloc(u8, 4096);
+    var n: usize = 0;
+    while (n < buf.len) {
+        const r = try std.posix.read(fd, buf[n..]);
+        if (r == 0) break;
+        n += r;
+    }
+    return buf[0..n];
 }

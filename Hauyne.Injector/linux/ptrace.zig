@@ -66,7 +66,7 @@ pub fn pokeData(pid: i32, addr: u64, data: usize) !void {
         if (ptrace(PTRACE_POKEDATA, pid, @intCast(addr), data) == 0) return;
         const err = std.c._errno().*;
         if (err != ESRCH) return error.PtracePokeDataFailed;
-        std.Thread.sleep(std.time.ns_per_ms);
+        _ = std.c.nanosleep(&.{ .sec = 0, .nsec = std.time.ns_per_ms }, null);
     }
     std.debug.print("[hauyne] PTRACE_POKEDATA ESRCH persisted (pid {d}, state={s})\n", .{ pid, readThreadState(pid) });
     return error.PtracePokeDataEsrch;
@@ -79,7 +79,7 @@ pub fn getRegs(pid: i32) !UserRegsStruct {
         if (ptrace(PTRACE_GETREGS, pid, 0, @intFromPtr(&regs)) == 0) return regs;
         const err = std.c._errno().*;
         if (err != ESRCH) return error.PtraceGetRegsFailed;
-        std.Thread.sleep(std.time.ns_per_ms);
+        _ = std.c.nanosleep(&.{ .sec = 0, .nsec = std.time.ns_per_ms }, null);
     }
     std.debug.print("[hauyne] PTRACE_GETREGS ESRCH persisted (pid {d}, state={s})\n", .{ pid, readThreadState(pid) });
     return error.PtraceGetRegsEsrch;
@@ -92,7 +92,7 @@ pub fn setRegs(pid: i32, regs: UserRegsStruct) !void {
         if (ptrace(PTRACE_SETREGS, pid, 0, @intFromPtr(&r)) == 0) return;
         const err = std.c._errno().*;
         if (err != ESRCH) return error.PtraceSetRegsFailed;
-        std.Thread.sleep(std.time.ns_per_ms);
+        _ = std.c.nanosleep(&.{ .sec = 0, .nsec = std.time.ns_per_ms }, null);
     }
     std.debug.print("[hauyne] PTRACE_SETREGS ESRCH persisted (pid {d}, state={s})\n", .{ pid, readThreadState(pid) });
     return error.PtraceSetRegsEsrch;
@@ -124,11 +124,19 @@ var thread_state_buf: [256]u8 = undefined;
 pub fn readThreadState(tid: i32) []const u8 {
     var path_buf: [64]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "/proc/{d}/status", .{tid}) catch return "unknown";
-    const text = std.fs.cwd().readFile(path, &thread_state_buf) catch return "unknown";
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0) catch return "unknown";
+    defer _ = std.c.close(fd);
+    var n: usize = 0;
+    while (n < thread_state_buf.len) {
+        const r = std.posix.read(fd, thread_state_buf[n..]) catch return "unknown";
+        if (r == 0) break;
+        n += r;
+    }
+    const text = thread_state_buf[0..n];
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
         if (std.mem.startsWith(u8, line, "State:")) {
-            return std.mem.trimLeft(u8, line[6..], " \t");
+            return std.mem.trimStart(u8, line[6..], " \t");
         }
     }
     return "unknown";

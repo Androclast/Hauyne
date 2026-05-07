@@ -25,6 +25,7 @@ const MAP_ANONYMOUS: u64 = 0x20;
 var debug: bool = false;
 
 pub fn inject(
+    io: std.Io,
     allocator: std.mem.Allocator,
     tgid: i32,
     so_path: []const u8,
@@ -35,16 +36,16 @@ pub fn inject(
     if (comptime builtin.cpu.arch != .x86_64) return error.UnsupportedArch;
 
     debug = blk: {
-        const val = std.posix.getenv("HAUYNE_DEBUG");
-        break :blk val != null and std.mem.eql(u8, val.?, "1");
+        const val = std.c.getenv("HAUYNE_DEBUG") orelse break :blk false;
+        break :blk val[0] == '1';
     };
 
-    const victim = try victim_mod.pickVictimThread(allocator, tgid);
+    const victim = try victim_mod.pickVictimThread(io, allocator, tgid);
 
-    const dlopen_addr = try symbols.findSymbolInTarget(allocator, tgid, "dlopen");
-    const dlsym_addr = try symbols.findSymbolInTarget(allocator, tgid, "dlsym");
-    const pthread_create_addr = try symbols.findSymbolInTarget(allocator, tgid, "pthread_create");
-    const pthread_detach_addr = try symbols.findSymbolInTarget(allocator, tgid, "pthread_detach");
+    const dlopen_addr = try symbols.findSymbolInTarget(io, allocator, tgid, "dlopen");
+    const dlsym_addr = try symbols.findSymbolInTarget(io, allocator, tgid, "dlsym");
+    const pthread_create_addr = try symbols.findSymbolInTarget(io, allocator, tgid, "pthread_create");
+    const pthread_detach_addr = try symbols.findSymbolInTarget(io, allocator, tgid, "pthread_detach");
 
     std.debug.print("[hauyne] victim tid={d} (tgid={d})\n", .{ victim, tgid });
     if (debug) {

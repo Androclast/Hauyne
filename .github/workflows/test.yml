@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  linux-smoke-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build
+        run: ./build.sh --zig-targets "x86_64-linux-gnu"
+
+      - name: Build victim
+        run: dotnet build Hauyne.Victim -c Release --nologo
+
+      - name: Test
+        run: |
+          echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+
+          rm -f /tmp/Hauyne.txt /tmp/hauyne-victim.pid
+
+          dotnet exec Hauyne.Victim/bin/Release/net9.0/Hauyne.Victim.dll &
+          sleep 3
+
+          VICTIM_PID=$(cat /tmp/hauyne-victim.pid)
+          echo "Victim PID: $VICTIM_PID"
+
+          grep -q libhostfxr /proc/$VICTIM_PID/maps
+
+          ./bin/Hauyne.Injector "$VICTIM_PID"
+
+          sleep 3
+
+          if [ -f /tmp/Hauyne.txt ]; then
+            echo "$(cat /tmp/Hauyne.txt)"
+          else
+            echo "FUCK"
+            cat bin/x86_64-linux-gnu/hauyne.log 2>/dev/null || true
+            exit 1
+          fi
+
+          kill $VICTIM_PID 2>/dev/null || true
