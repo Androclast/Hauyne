@@ -23,12 +23,10 @@ pub fn litCharT(comptime s: [:0]const u8) [*:0]const CharT {
 }
 
 pub fn appendLog(log_path: []const u8, msg: []const u8) void {
-    const file = std.fs.cwd().openFile(log_path, .{ .mode = .read_write }) catch
-        std.fs.cwd().createFile(log_path, .{}) catch return;
-    defer file.close();
-    file.seekFromEnd(0) catch return;
-    file.writeAll(msg) catch return;
-    file.writeAll("\n") catch return;
+    const fd = std.posix.openat(std.posix.AT.FDCWD, log_path, .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }, 0o644) catch return;
+    defer _ = std.c.close(fd);
+    _ = std.c.write(fd, msg.ptr, msg.len);
+    _ = std.c.write(fd, "\n".ptr, 1);
 }
 
 pub fn charTLen(ptr: [*:0]const CharT) usize {

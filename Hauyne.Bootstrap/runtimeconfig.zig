@@ -40,14 +40,16 @@ fn detectVersion(out: []u8) ?Detected {
 }
 
 fn detectLinux(out: []u8) ?[]const u8 {
-    var fba_buf: [256 * 1024]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
-    const content = std.fs.cwd().readFileAlloc(
-        fba.allocator(),
-        "/proc/self/maps",
-        fba_buf.len,
-    ) catch return null;
-    return extractVersion(content, "/libhostfxr.so", '/', out);
+    var maps_buf: [256 * 1024]u8 = undefined;
+    const fd = std.posix.openat(std.posix.AT.FDCWD, "/proc/self/maps", .{ .ACCMODE = .RDONLY }, 0) catch return null;
+    defer _ = std.c.close(fd);
+    var total: usize = 0;
+    while (total < maps_buf.len) {
+        const n = std.posix.read(fd, maps_buf[total..]) catch return null;
+        if (n == 0) break;
+        total += n;
+    }
+    return extractVersion(maps_buf[0..total], "/libhostfxr.so", '/', out);
 }
 
 fn detectWindows(out: []u8) ?[]const u8 {
@@ -84,9 +86,14 @@ fn writeLinux(config_buf: []t.CharT, content: []const u8) ?[*:0]const t.CharT {
         .{pid},
     ) catch return null;
 
-    const file = std.fs.createFileAbsolute(path, .{ .truncate = true }) catch return null;
-    defer file.close();
-    file.writeAll(content) catch return null;
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644) catch return null;
+    defer _ = std.c.close(fd);
+    var written: usize = 0;
+    while (written < content.len) {
+        const n = std.c.write(fd, content[written..].ptr, content[written..].len);
+        if (n < 1) return null;
+        written += @intCast(n);
+    }
 
     if (path.len + 1 > config_buf.len) return null;
     @memcpy(config_buf[0..path.len], path);
@@ -129,8 +136,7 @@ pub fn unlink(path: [*:0]const t.CharT) void {
     if (t.is_windows) {
         _ = DeleteFileW(@ptrCast(path));
     } else {
-        const len = p.charTLen(path);
-        std.fs.deleteFileAbsolute(path[0..len]) catch {};
+        _ = std.c.unlink(path);
     }
 }
 

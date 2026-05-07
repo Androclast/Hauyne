@@ -14,15 +14,14 @@ const max_matches = 64;
 fn println(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) void {
     const msg = std.fmt.allocPrint(allocator, fmt, args) catch return;
     defer allocator.free(msg);
-    std.fs.File.stdout().writeAll(msg) catch {};
+    _ = std.c.write(std.Io.File.stdout().handle, msg.ptr, msg.len);
 }
 
-pub fn main() u8 {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+pub fn main(init: std.process.Init) u8 {
+    const allocator = init.arena.allocator();
+    const io = init.io;
 
-    const args = std.process.argsAlloc(allocator) catch return 1;
+    const args = init.minimal.args.toSlice(allocator) catch return 1;
 
     if (args.len < 2) {
         std.debug.print("Usage: {s} <process-name|pid> [payload-path] [--type <name>] [--method <name>]\n", .{args[0]});
@@ -59,9 +58,9 @@ pub fn main() u8 {
         }
     }
 
-    const pid = resolveTarget(allocator, process_spec) catch return 1;
+    const pid = resolveTarget(io, allocator, process_spec) catch return 1;
 
-    const exe_dir = std.fs.selfExeDirPathAlloc(allocator) catch {
+    const exe_dir = std.process.executableDirPathAlloc(io, allocator) catch {
         std.debug.print("Failed to resolve exe dir\n", .{});
         return 1;
     };
@@ -69,7 +68,7 @@ pub fn main() u8 {
     const bootstrap_name = if (is_windows) "Hauyne.Bootstrap.dll" else "libHauyne.Bootstrap.so";
     const bootstrap_path = std.fs.path.join(allocator, &.{ exe_dir, bootstrap_name }) catch return 1;
 
-    std.fs.accessAbsolute(bootstrap_path, .{}) catch {
+    std.Io.Dir.accessAbsolute(io, bootstrap_path, .{}) catch {
         std.debug.print("Bootstrap not found: {s}\n", .{bootstrap_path});
         return 1;
     };
@@ -95,11 +94,11 @@ pub fn main() u8 {
     return 0;
 }
 
-fn resolveTarget(allocator: std.mem.Allocator, spec: []const u8) !u32 {
+fn resolveTarget(io: std.Io, allocator: std.mem.Allocator, spec: []const u8) !u32 {
     var inaccessible: usize = 0;
 
     if (std.fmt.parseInt(u32, spec, 10)) |pid| {
-        if (!(try isDotNetProcess(allocator, pid, &inaccessible))) {
+        if (!(try isDotNetProcess(io, allocator, pid, &inaccessible))) {
             if (inaccessible > 0) {
                 std.debug.print("Cannot inspect PID {d} — permission denied (try root or ptrace_scope=0)\n", .{pid});
             } else {
@@ -112,7 +111,7 @@ fn resolveTarget(allocator: std.mem.Allocator, spec: []const u8) !u32 {
 
     var matches: [max_matches]u32 = undefined;
     var n: usize = 0;
-    try collectMatches(spec, &matches, &n, &inaccessible);
+    try collectMatches(io, spec, &matches, &n, &inaccessible);
 
     if (n == 0) {
         if (inaccessible > 0) {
@@ -127,7 +126,7 @@ fn resolveTarget(allocator: std.mem.Allocator, spec: []const u8) !u32 {
     // happen and matches[0..n] stays intact for the "none loaded hostfxr" list.
     var vn: usize = 0;
     for (matches[0..n]) |pid| {
-        if (isDotNetProcess(allocator, pid, &inaccessible) catch false) {
+        if (isDotNetProcess(io, allocator, pid, &inaccessible) catch false) {
             matches[vn] = pid;
             vn += 1;
         }
@@ -154,25 +153,25 @@ fn printPidList(pids: []const u32) void {
     std.debug.print("\n", .{});
 }
 
-fn collectMatches(name: []const u8, out: []u32, count: *usize, inaccessible: *usize) !void {
+fn collectMatches(io: std.Io, name: []const u8, out: []u32, count: *usize, inaccessible: *usize) !void {
     if (is_windows) return collectMatchesWindows(name, out, count);
-    return collectMatchesLinux(name, out, count, inaccessible);
+    return collectMatchesLinux(io, name, out, count, inaccessible);
 }
 
-fn collectMatchesLinux(name: []const u8, out: []u32, count: *usize, inaccessible: *usize) !void {
+fn collectMatchesLinux(io: std.Io, name: []const u8, out: []u32, count: *usize, inaccessible: *usize) !void {
     const self_pid: u32 = @intCast(std.posix.system.getpid());
 
-    var proc_dir = try std.fs.openDirAbsolute("/proc", .{ .iterate = true });
-    defer proc_dir.close();
+    var proc_dir = try std.Io.Dir.openDirAbsolute(io, "/proc", .{ .iterate = true });
+    defer proc_dir.close(io);
 
     var it = proc_dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         if (entry.kind != .directory) continue;
 
         const pid = std.fmt.parseInt(u32, entry.name, 10) catch continue;
         if (pid == self_pid) continue;
 
-        if (pidMatchesName(pid, name, inaccessible)) {
+        if (pidMatchesName(io, pid, name, inaccessible)) {
             if (count.* >= out.len) return;
             out[count.*] = pid;
             count.* += 1;
@@ -180,24 +179,29 @@ fn collectMatchesLinux(name: []const u8, out: []u32, count: *usize, inaccessible
     }
 }
 
-fn pidMatchesName(pid: u32, name: []const u8, inaccessible: *usize) bool {
+fn pidMatchesName(io: std.Io, pid: u32, name: []const u8, inaccessible: *usize) bool {
     var path_buf: [64]u8 = undefined;
 
     const exe_link = std.fmt.bufPrint(&path_buf, "/proc/{d}/exe", .{pid}) catch return false;
     var target_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (std.fs.readLinkAbsolute(exe_link, &target_buf)) |target| {
-        if (nameMatches(std.fs.path.basename(target), name)) return true;
+    if (std.Io.Dir.readLinkAbsolute(io, exe_link, &target_buf)) |len| {
+        if (nameMatches(std.fs.path.basename(target_buf[0..len]), name)) return true;
     } else |err| switch (err) {
         error.AccessDenied, error.PermissionDenied => inaccessible.* += 1,
         else => {},
     }
 
     const cmdline_path = std.fmt.bufPrint(&path_buf, "/proc/{d}/cmdline", .{pid}) catch return false;
-    const file = std.fs.openFileAbsolute(cmdline_path, .{}) catch return false;
-    defer file.close();
+    const fd = std.posix.openat(std.posix.AT.FDCWD, cmdline_path, .{ .ACCMODE = .RDONLY }, 0) catch return false;
+    defer _ = std.c.close(fd);
 
     var cmdline: [4096]u8 = undefined;
-    const n = file.readAll(&cmdline) catch return false;
+    var n: usize = 0;
+    while (n < cmdline.len) {
+        const r = std.posix.read(fd, cmdline[n..]) catch return false;
+        if (r == 0) break;
+        n += r;
+    }
 
     var args = std.mem.splitScalar(u8, cmdline[0..n], 0);
     while (args.next()) |arg| {
@@ -287,16 +291,16 @@ fn collectMatchesWindows(name: []const u8, out: []u32, count: *usize) !void {
     }
 }
 
-fn isDotNetProcess(allocator: std.mem.Allocator, pid: u32, inaccessible: *usize) !bool {
+fn isDotNetProcess(io: std.Io, allocator: std.mem.Allocator, pid: u32, inaccessible: *usize) !bool {
     if (is_windows) return isDotNetProcessWindows(pid);
-    return isDotNetProcessLinux(allocator, pid, inaccessible);
+    return isDotNetProcessLinux(io, allocator, pid, inaccessible);
 }
 
-fn isDotNetProcessLinux(allocator: std.mem.Allocator, pid: u32, inaccessible: *usize) !bool {
+fn isDotNetProcessLinux(io: std.Io, allocator: std.mem.Allocator, pid: u32, inaccessible: *usize) !bool {
     const maps_path = try std.fmt.allocPrint(allocator, "/proc/{}/maps", .{pid});
     defer allocator.free(maps_path);
 
-    const data = std.fs.cwd().readFileAlloc(allocator, maps_path, 16 * 1024 * 1024) catch |err| switch (err) {
+    const data = std.Io.Dir.cwd().readFileAlloc(io, maps_path, allocator, std.Io.Limit.limited(16 * 1024 * 1024)) catch |err| switch (err) {
         error.AccessDenied, error.PermissionDenied => {
             inaccessible.* += 1;
             return false;
