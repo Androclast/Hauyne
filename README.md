@@ -1,10 +1,12 @@
 # Hauyne
 
-A managed (lie) .NET DLL injector injecting managed (truth) .NET DLLs for managed (truth) .NET processes.
+Cross-platform, Cross-Arch .NET to .NET injector. Build in Zig.
 
 Targets running .NET 5+ processes via hostfxr, injects into the default AssemblyLoadContext.
 
 ## Building
+
+**Zig 0.16.0 and dotnet required**
 
 Run `./build.sh`.
 
@@ -24,14 +26,12 @@ Knobs:
 ## Requirements
 
 * Target must be a running .NET 5+ process
-* Matching .NET version with target (targets .NET 9 out of the box)
+* Matching .NET version with target
 * Matching arch with target
-* Zig
-* .NET SDK
 
 ### Linux
 
-* x86-64 only
+* x86-64 and aarch64
 * Root, or `ptrace_scope` shuttered: `echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope`
 
 <img width="964" height="540" alt="image" src="https://github.com/user-attachments/assets/aa372ab7-4080-441a-a37f-b5a8a0d951ce" />
