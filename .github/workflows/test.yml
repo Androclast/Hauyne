@@ -58,7 +58,7 @@ jobs:
 
           grep -q libhostfxr /proc/$VICTIM_PID/maps
 
-          ./bin/Hauyne.Injector "$VICTIM_PID" "$PWD/bin/net${{ matrix.dotnet }}/Hauyne.Payload.dll"
+          HAUYNE_DEBUG=1 ./bin/Hauyne.Injector "$VICTIM_PID" "$PWD/bin/net${{ matrix.dotnet }}/Hauyne.Payload.dll"
 
           sleep 3
 
