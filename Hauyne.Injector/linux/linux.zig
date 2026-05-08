@@ -12,9 +12,13 @@ const shim = @import("shim.zig");
 const symbols = @import("symbols.zig");
 const victim_mod = @import("victim.zig");
 
-const UserRegsStruct = ptrace_mod.UserRegsStruct;
+const arch = switch (builtin.cpu.arch) {
+    .x86_64 => @import("arch/x86_64.zig"),
+    .aarch64 => @import("arch/aarch64.zig"),
+    else => @compileError("unsupported architecture"),
+};
 
-const SYS_mmap: u64 = 9;
+const UserRegsStruct = ptrace_mod.UserRegsStruct;
 
 const PROT_READ: u64 = 0x1;
 const PROT_WRITE: u64 = 0x2;
@@ -33,8 +37,6 @@ pub fn inject(
     type_name: ?[]const u8,
     method_name: ?[]const u8,
 ) !void {
-    if (comptime builtin.cpu.arch != .x86_64) return error.UnsupportedArch;
-
     debug = blk: {
         const val = std.c.getenv("HAUYNE_DEBUG") orelse break :blk false;
         break :blk val[0] == '1';
@@ -62,13 +64,10 @@ pub fn inject(
     if (ptrace_mod.waitpid(victim, &wstatus, 0) < 0) return error.WaitpidInterruptFailed;
 
     const saved = try ptrace_mod.getRegs(victim);
-    if (debug) {
-        std.debug.print("[hauyne] saved rip=0x{x} rsp=0x{x} orig_rax={d}\n", .{ saved.rip, saved.rsp, saved.orig_rax });
-    }
+    if (debug) arch.printSavedRegs(saved);
 
-    // rip-2 should be a syscall, chimp out otherwise
-    const insn_at_prev = try ptrace_mod.peekData(victim, saved.rip - 2);
-    if ((insn_at_prev & 0xFFFF) != 0x050F)
+    const insn = try ptrace_mod.peekData(victim, arch.getPc(saved) - arch.syscall_insn_size);
+    if (!arch.checkSyscallOpcode(insn))
         return error.InvalidSyscallOpcode;
 
     if (so_path.len >= shim.PayloadOffset - shim.PathOffset) return error.BootstrapPathTooLong;
@@ -92,25 +91,14 @@ pub fn inject(
 
 fn bootstrapMmap(pid: i32, saved: UserRegsStruct) !usize {
     var regs = saved;
-    regs.rip = saved.rip - 2; // rewind to the SYSCALL instruction
-    regs.rax = SYS_mmap;
-    regs.rdi = 0; // addr (let kernel choose)
-    regs.rsi = shim.ScratchSize; // length
-    regs.rdx = PROT_READ | PROT_WRITE | PROT_EXEC;
-    regs.r10 = MAP_PRIVATE | MAP_ANONYMOUS;
-    regs.r8 = @bitCast(@as(i64, -1)); // fd
-    regs.r9 = 0; // offset
-    regs.orig_rax = @bitCast(@as(i64, -1)); // prevent any restart of prior syscall
+    arch.setupMmapRegs(&regs, shim.ScratchSize, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS);
 
     try ptrace_mod.setRegs(pid, regs);
-
-    // Step into syscall-enter-stop.
     try continueAndWait(pid, ptrace_mod.PTRACE_SYSCALL, "mmap-enter");
-    // Step out of syscall-exit-stop.
     try continueAndWait(pid, ptrace_mod.PTRACE_SYSCALL, "mmap-exit");
 
     const after = try ptrace_mod.getRegs(pid);
-    const ret: i64 = @bitCast(after.rax);
+    const ret: i64 = @bitCast(arch.getSyscallResult(after));
     if (ret < 0 and ret > -4096)
         return error.MmapInTargetFailed;
 
@@ -119,8 +107,7 @@ fn bootstrapMmap(pid: i32, saved: UserRegsStruct) !usize {
 
 fn runVictimShim(pid: i32, saved: UserRegsStruct, shim_addr: usize) !void {
     var regs = saved;
-    regs.rip = shim_addr;
-    regs.orig_rax = @bitCast(@as(i64, -1));
+    arch.setupShimRegs(&regs, shim_addr);
 
     try ptrace_mod.setRegs(pid, regs);
     try continueAndWait(pid, ptrace_mod.PTRACE_CONT, "victim-shim");

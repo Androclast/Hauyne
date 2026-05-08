@@ -42,7 +42,7 @@ jobs:
           mkdir -p dist
 
           for dotnet in $(echo "${{ steps.versions.outputs.raw }}" | tr ';' ' '); do
-            for target in x86_64-linux-gnu x86_64-linux-musl x86_64-windows-gnu; do
+            for target in x86_64-linux-gnu x86_64-linux-musl x86_64-windows-gnu aarch64-linux-gnu aarch64-linux-musl; do
               staging="dist/staging"
               mkdir -p "$staging"
 

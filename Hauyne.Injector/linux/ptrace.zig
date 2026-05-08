@@ -5,6 +5,15 @@
 // Mozilla Public License, v. 2.0.
 
 const std = @import("std");
+const builtin = @import("builtin");
+
+const arch = switch (builtin.cpu.arch) {
+    .x86_64 => @import("arch/x86_64.zig"),
+    .aarch64 => @import("arch/aarch64.zig"),
+    else => @compileError("unsupported architecture"),
+};
+
+pub const UserRegsStruct = arch.UserRegsStruct;
 
 pub const PTRACE_PEEKDATA: c_int = 2;
 pub const PTRACE_POKEDATA: c_int = 5;
@@ -15,42 +24,38 @@ pub const PTRACE_SYSCALL: c_int = 24;
 pub const PTRACE_DETACH: c_int = 17;
 pub const PTRACE_SEIZE: c_int = 0x4206;
 pub const PTRACE_INTERRUPT: c_int = 0x4207;
+pub const PTRACE_GETREGSET: c_int = 0x4204;
+pub const PTRACE_SETREGSET: c_int = 0x4205;
+pub const NT_PRSTATUS: c_int = 1;
 
 pub const SIGTRAP: c_int = 5;
 pub const ESRCH: c_int = 3;
 
-pub const UserRegsStruct = extern struct {
-    r15: u64,
-    r14: u64,
-    r13: u64,
-    r12: u64,
-    rbp: u64,
-    rbx: u64,
-    r11: u64,
-    r10: u64,
-    r9: u64,
-    r8: u64,
-    rax: u64,
-    rcx: u64,
-    rdx: u64,
-    rsi: u64,
-    rdi: u64,
-    orig_rax: u64,
-    rip: u64,
-    cs: u64,
-    eflags: u64,
-    rsp: u64,
-    ss: u64,
-    fs_base: u64,
-    gs_base: u64,
-    ds: u64,
-    es: u64,
-    fs: u64,
-    gs: u64,
+const Iovec = extern struct {
+    base: [*]u8,
+    len: usize,
 };
 
 pub extern "c" fn ptrace(request: c_int, pid: c_int, addr: usize, data: usize) callconv(std.builtin.CallingConvention.c) c_long;
 pub extern "c" fn waitpid(pid: c_int, status: *c_int, options: c_int) callconv(std.builtin.CallingConvention.c) c_int;
+
+fn rawGetRegs(pid: i32, regs: *UserRegsStruct) c_long {
+    if (builtin.cpu.arch == .aarch64) {
+        var iov = Iovec{ .base = @ptrCast(regs), .len = @sizeOf(UserRegsStruct) };
+        return ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, @intFromPtr(&iov));
+    } else {
+        return ptrace(PTRACE_GETREGS, pid, 0, @intFromPtr(regs));
+    }
+}
+
+fn rawSetRegs(pid: i32, regs: *UserRegsStruct) c_long {
+    if (builtin.cpu.arch == .aarch64) {
+        var iov = Iovec{ .base = @ptrCast(regs), .len = @sizeOf(UserRegsStruct) };
+        return ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, @intFromPtr(&iov));
+    } else {
+        return ptrace(PTRACE_SETREGS, pid, 0, @intFromPtr(regs));
+    }
+}
 
 pub fn peekData(pid: i32, addr: u64) !i64 {
     std.c._errno().* = 0;
@@ -76,7 +81,7 @@ pub fn getRegs(pid: i32) !UserRegsStruct {
     var regs: UserRegsStruct = undefined;
     var attempt: usize = 0;
     while (attempt < 5) : (attempt += 1) {
-        if (ptrace(PTRACE_GETREGS, pid, 0, @intFromPtr(&regs)) == 0) return regs;
+        if (rawGetRegs(pid, &regs) == 0) return regs;
         const err = std.c._errno().*;
         if (err != ESRCH) return error.PtraceGetRegsFailed;
         _ = std.c.nanosleep(&.{ .sec = 0, .nsec = std.time.ns_per_ms }, null);
@@ -89,7 +94,7 @@ pub fn setRegs(pid: i32, regs: UserRegsStruct) !void {
     var r = regs;
     var attempt: usize = 0;
     while (attempt < 5) : (attempt += 1) {
-        if (ptrace(PTRACE_SETREGS, pid, 0, @intFromPtr(&r)) == 0) return;
+        if (rawSetRegs(pid, &r) == 0) return;
         const err = std.c._errno().*;
         if (err != ESRCH) return error.PtraceSetRegsFailed;
         _ = std.c.nanosleep(&.{ .sec = 0, .nsec = std.time.ns_per_ms }, null);

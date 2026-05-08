@@ -8,16 +8,25 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         dotnet: ['9.0', '10.0']
+        arch: [x86_64, aarch64]
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            zig-target: x86_64-linux-gnu
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            zig-target: aarch64-linux-gnu
+
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: ${{ matrix.dotnet }}.x
 
@@ -27,7 +36,7 @@ jobs:
           version: 0.16.0
 
       - name: Build
-        run: ./build.sh --zig-targets "x86_64-linux-gnu" --no-dotnet
+        run: ./build.sh --zig-targets "${{ matrix.zig-target }}" --no-dotnet
 
       - name: Build payload
         run: dotnet build Hauyne.Payload -c Release -p:TargetFramework=net${{ matrix.dotnet }} --nologo
@@ -38,6 +47,8 @@ jobs:
       - name: Test
         run: |
           echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+          ulimit -c unlimited
+          echo '/tmp/core.%p' | sudo tee /proc/sys/kernel/core_pattern
 
           rm -f /tmp/Hauyne.txt /tmp/hauyne-victim.pid
 
@@ -49,16 +60,35 @@ jobs:
 
           grep -q libhostfxr /proc/$VICTIM_PID/maps
 
-          ./bin/Hauyne.Injector "$VICTIM_PID" "$PWD/bin/net${{ matrix.dotnet }}/Hauyne.Payload.dll"
+          HAUYNE_DEBUG=1 ./bin/Hauyne.Injector "$VICTIM_PID" "$PWD/bin/net${{ matrix.dotnet }}/Hauyne.Payload.dll"
 
           sleep 3
 
-          if [ -f /tmp/Hauyne.txt ]; then
-            echo "PASS: $(cat /tmp/Hauyne.txt)"
-          else
+          if [ ! -f /tmp/Hauyne.txt ]; then
             echo "FUCK! Bootstrap log:"
             find bin -name 'hauyne.log' -exec cat {} \; 2>/dev/null || true
             exit 1
           fi
+          echo "PASS: $(cat /tmp/Hauyne.txt)"
+
+          echo "Waiting 10s to ensure victim survived"
+          sleep 10
+
+          if kill -0 $VICTIM_PID 2>/dev/null; then
+            echo "Victim still alive"
+          else
+            echo "Victim died"
+            exit 1
+          fi
 
           kill $VICTIM_PID 2>/dev/null || true
+
+      - name: Backtrace
+        if: failure()
+        run: |
+          sudo apt-get install -y gdb > /dev/null 2>&1
+          for core in /tmp/core.*; do
+            [ -f "$core" ] || continue
+            echo ">~< backtrace >~~~<"
+            gdb -batch -ex 'thread apply all bt' dotnet "$core" 2>/dev/null || true
+          done

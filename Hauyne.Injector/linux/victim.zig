@@ -6,12 +6,10 @@
 
 const std = @import("std");
 
-const IdleSyscalls = [_]i64{
-    7,   // poll
-    232, // epoll_wait
-    281, // epoll_pwait
-    271, // pselect6
-    230, // clock_nanosleep
+const arch = switch (@import("builtin").cpu.arch) {
+    .x86_64 => @import("arch/x86_64.zig"),
+    .aarch64 => @import("arch/aarch64.zig"),
+    else => @compileError("unsupported architecture"),
 };
 
 // Falls back to the main thread, but main thread holds EE locks,
@@ -43,7 +41,7 @@ pub fn pickVictimThread(io: std.Io, allocator: std.mem.Allocator, tgid: i32) !i3
         const syscall_no = std.fmt.parseInt(i64, first, 10) catch continue;
 
         var found_idle = false;
-        for (IdleSyscalls) |idle| {
+        for (arch.idle_syscalls) |idle| {
             if (syscall_no == idle) {
                 found_idle = true;
                 break;
