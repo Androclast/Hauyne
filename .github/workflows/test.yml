@@ -8,16 +8,25 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         dotnet: ['9.0', '10.0']
+        arch: [x86_64, aarch64]
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            zig-target: x86_64-linux-gnu
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            zig-target: aarch64-linux-gnu
+
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: ${{ matrix.dotnet }}.x
 
@@ -27,7 +36,7 @@ jobs:
           version: 0.16.0
 
       - name: Build
-        run: ./build.sh --zig-targets "x86_64-linux-gnu" --no-dotnet
+        run: ./build.sh --zig-targets "${{ matrix.zig-target }}" --no-dotnet
 
       - name: Build payload
         run: dotnet build Hauyne.Payload -c Release -p:TargetFramework=net${{ matrix.dotnet }} --nologo

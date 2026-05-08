@@ -8,18 +8,89 @@ const std = @import("std");
 const shim = @import("../shim.zig");
 
 pub fn emit(
-    _: *[shim.ScratchSize]u8,
-    _: u64,
-    _: u64,
-    _: u64,
-    _: u64,
-    _: u64,
-    _: usize,
-    _: usize,
-    _: usize,
-    _: usize,
+    page: *[shim.ScratchSize]u8,
+    pthread_handle_addr: u64,
+    path_addr: u64,
+    payload_addr: u64,
+    symbol_addr: u64,
+    payload_shim_addr: u64,
+    dlopen_addr: usize,
+    dlsym_addr: usize,
+    pthread_create_addr: usize,
+    pthread_detach_addr: usize,
 ) void {
-    // mraow
+    //   [imm64 thread_handle]          movz+movk x0, &thread_handle
+    //   E1 03 1F AA                    mov x1, xzr             ; attr = NULL
+    //   [imm64 payload_shim]           movz+movk x2, payload_shim
+    //   E3 03 1F AA                    mov x3, xzr             ; arg = NULL (shim uses baked addrs)
+    //   [imm64 pthread_create]         movz+movk x9, pthread_create
+    //   20 01 3F D6                    blr x9
+    //   [imm64 thread_handle]          movz+movk x0, &thread_handle
+    //   00 00 40 F9                    ldr x0, [x0]            ; pthread_t handle written by pthread_create
+    //   [imm64 pthread_detach]         movz+movk x9, pthread_detach
+    //   20 01 3F D6                    blr x9                  ; reap stack/TCB after the worker exits
+    //   00 00 20 D4                    brk #0                  ; troleo completado, return
+    // zig fmt: off
+    {
+        var o: usize = shim.VictimShimOff;
+        writeImm64(page, &o, 0, pthread_handle_addr);
+        page[o] = 0xE1; o += 1; page[o] = 0x03; o += 1; page[o] = 0x1F; o += 1; page[o] = 0xAA; o += 1;
+        writeImm64(page, &o, 2, payload_shim_addr);
+        page[o] = 0xE3; o += 1; page[o] = 0x03; o += 1; page[o] = 0x1F; o += 1; page[o] = 0xAA; o += 1;
+        writeImm64(page, &o, 9, @intCast(pthread_create_addr));
+        page[o] = 0x20; o += 1; page[o] = 0x01; o += 1; page[o] = 0x3F; o += 1; page[o] = 0xD6; o += 1;
+        writeImm64(page, &o, 0, pthread_handle_addr);
+        page[o] = 0x00; o += 1; page[o] = 0x00; o += 1; page[o] = 0x40; o += 1; page[o] = 0xF9; o += 1;
+        writeImm64(page, &o, 9, @intCast(pthread_detach_addr));
+        page[o] = 0x20; o += 1; page[o] = 0x01; o += 1; page[o] = 0x3F; o += 1; page[o] = 0xD6; o += 1;
+        page[o] = 0x00; o += 1; page[o] = 0x00; o += 1; page[o] = 0x20; o += 1; page[o] = 0xD4; o += 1;
+    }
+    // zig fmt: on
+
+    //   FD 7B BE A9                    stp x29, x30, [sp, #-32]!
+    //   FD 03 00 91                    mov x29, sp
+    //   [imm64 so_path]                movz+movk x0, so_path
+    //   41 00 80 D2                    mov x1, #2              ; RTLD_NOW
+    //   [imm64 dlopen]                 movz+movk x9, dlopen
+    //   20 01 3F D6                    blr x9
+    //   60 02 00 B4                    cbz x0, .done (skip dlsym+call)
+    //   E0 07 00 F9                    str x0, [sp, #8]
+    //   E0 07 40 F9                    ldr x0, [sp, #8]
+    //   [imm64 symbol]                 movz+movk x1, "hauyne_start"
+    //   [imm64 dlsym]                  movz+movk x9, dlsym
+    //   20 01 3F D6                    blr x9
+    //   C0 00 00 B4                    cbz x0, .done
+    //   E9 03 00 AA                    mov x9, x0
+    //   [imm64 payload]                movz+movk x0, payload_path   ; may be 0 fallback to null
+    //   20 01 3F D6                    blr x9
+    // .done:
+    //   FD 7B C2 A8                    ldp x29, x30, [sp], #32
+    //   E0 03 1F AA                    mov x0, xzr
+    //   C0 03 5F D6                    ret
+    // zig fmt: off
+    {
+        var o: usize = shim.PayloadShimOff;
+        page[o] = 0xFD; o += 1; page[o] = 0x7B; o += 1; page[o] = 0xBE; o += 1; page[o] = 0xA9; o += 1;
+        page[o] = 0xFD; o += 1; page[o] = 0x03; o += 1; page[o] = 0x00; o += 1; page[o] = 0x91; o += 1;
+        writeImm64(page, &o, 0, path_addr);
+        page[o] = 0x41; o += 1; page[o] = 0x00; o += 1; page[o] = 0x80; o += 1; page[o] = 0xD2; o += 1;
+        writeImm64(page, &o, 9, @intCast(dlopen_addr));
+        page[o] = 0x20; o += 1; page[o] = 0x01; o += 1; page[o] = 0x3F; o += 1; page[o] = 0xD6; o += 1;
+        page[o] = 0x60; o += 1; page[o] = 0x02; o += 1; page[o] = 0x00; o += 1; page[o] = 0xB4; o += 1;
+        page[o] = 0xE0; o += 1; page[o] = 0x07; o += 1; page[o] = 0x00; o += 1; page[o] = 0xF9; o += 1;
+        page[o] = 0xE0; o += 1; page[o] = 0x07; o += 1; page[o] = 0x40; o += 1; page[o] = 0xF9; o += 1;
+        writeImm64(page, &o, 1, symbol_addr);
+        writeImm64(page, &o, 9, @intCast(dlsym_addr));
+        page[o] = 0x20; o += 1; page[o] = 0x01; o += 1; page[o] = 0x3F; o += 1; page[o] = 0xD6; o += 1;
+        page[o] = 0xC0; o += 1; page[o] = 0x00; o += 1; page[o] = 0x00; o += 1; page[o] = 0xB4; o += 1;
+        page[o] = 0xE9; o += 1; page[o] = 0x03; o += 1; page[o] = 0x00; o += 1; page[o] = 0xAA; o += 1;
+        writeImm64(page, &o, 0, payload_addr);
+        page[o] = 0x20; o += 1; page[o] = 0x01; o += 1; page[o] = 0x3F; o += 1; page[o] = 0xD6; o += 1;
+        page[o] = 0xFD; o += 1; page[o] = 0x7B; o += 1; page[o] = 0xC2; o += 1; page[o] = 0xA8; o += 1;
+        page[o] = 0xE0; o += 1; page[o] = 0x03; o += 1; page[o] = 0x1F; o += 1; page[o] = 0xAA; o += 1;
+        page[o] = 0xC0; o += 1; page[o] = 0x03; o += 1; page[o] = 0x5F; o += 1; page[o] = 0xD6; o += 1;
+    }
+    // zig fmt: on
 }
 
 fn writeImm64(buf: []u8, o: *usize, rd: u32, value: u64) void {
