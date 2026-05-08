@@ -50,7 +50,7 @@ jobs:
 
           rm -f /tmp/Hauyne.txt /tmp/hauyne-victim.pid
 
-          dotnet exec Hauyne.Victim/bin/Release/net${{ matrix.dotnet }}/Hauyne.Victim.dll &
+          catchsegv dotnet exec Hauyne.Victim/bin/Release/net${{ matrix.dotnet }}/Hauyne.Victim.dll &
           sleep 3
 
           VICTIM_PID=$(cat /tmp/hauyne-victim.pid)
