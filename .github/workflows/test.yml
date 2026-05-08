@@ -78,13 +78,17 @@ jobs:
             echo "Victim still alive"
           else
             echo "Victim died"
-            sudo apt-get install -y gdb > /dev/null 2>&1
-            for core in /tmp/core.*; do
-              [ -f "$core" ] || continue
-              echo ">~< backtrace >~~~<"
-              gdb -batch -ex 'thread apply all bt' dotnet "$core" 2>/dev/null || true
-            done
             exit 1
           fi
 
           kill $VICTIM_PID 2>/dev/null || true
+
+      - name: Backtrace
+        if: failure()
+        run: |
+          sudo apt-get install -y gdb > /dev/null 2>&1
+          for core in /tmp/core.*; do
+            [ -f "$core" ] || continue
+            echo ">~< backtrace >~~~<"
+            gdb -batch -ex 'thread apply all bt' dotnet "$core" 2>/dev/null || true
+          done
