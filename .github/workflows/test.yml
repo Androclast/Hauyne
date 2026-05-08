@@ -47,10 +47,12 @@ jobs:
       - name: Test
         run: |
           echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+          ulimit -c unlimited
+          echo '/tmp/core.%p' | sudo tee /proc/sys/kernel/core_pattern
 
           rm -f /tmp/Hauyne.txt /tmp/hauyne-victim.pid
 
-          catchsegv dotnet exec Hauyne.Victim/bin/Release/net${{ matrix.dotnet }}/Hauyne.Victim.dll &
+          dotnet exec Hauyne.Victim/bin/Release/net${{ matrix.dotnet }}/Hauyne.Victim.dll &
           sleep 3
 
           VICTIM_PID=$(cat /tmp/hauyne-victim.pid)
@@ -76,6 +78,12 @@ jobs:
             echo "Victim still alive"
           else
             echo "Victim died"
+            sudo apt-get install -y gdb > /dev/null 2>&1
+            for core in /tmp/core.*; do
+              [ -f "$core" ] || continue
+              echo ">~< backtrace >~~~<"
+              gdb -batch -ex 'thread apply all bt' dotnet "$core" 2>/dev/null || true
+            done
             exit 1
           fi
 
