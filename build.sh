@@ -25,6 +25,8 @@ DEFAULT_ZIG_TARGETS=(
     x86_64-linux-gnu
     x86_64-linux-musl
     x86_64-windows-gnu
+    aarch64-linux-gnu
+    aarch64-linux-musl
 )
 ZIG_TARGETS=("${DEFAULT_ZIG_TARGETS[@]}")
 
@@ -109,6 +111,7 @@ build_zig() {
     }
     link_canonical x86_64-linux-gnu
     link_canonical x86_64-windows-gnu
+    link_canonical aarch64-linux-gnu
 }
 
 build_dotnet() {
