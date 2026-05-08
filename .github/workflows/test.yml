@@ -62,11 +62,20 @@ jobs:
 
           sleep 3
 
-          if [ -f /tmp/Hauyne.txt ]; then
-            echo "PASS: $(cat /tmp/Hauyne.txt)"
-          else
+          if [ ! -f /tmp/Hauyne.txt ]; then
             echo "FUCK! Bootstrap log:"
             find bin -name 'hauyne.log' -exec cat {} \; 2>/dev/null || true
+            exit 1
+          fi
+          echo "PASS: $(cat /tmp/Hauyne.txt)"
+
+          echo "Waiting 10s to ensure victim survived"
+          sleep 10
+
+          if kill -0 $VICTIM_PID 2>/dev/null; then
+            echo "Victim still alive"
+          else
+            echo "Victim died"
             exit 1
           fi
 

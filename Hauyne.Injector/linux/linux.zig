@@ -86,6 +86,7 @@ pub fn inject(
 
     try runVictimShim(victim, saved, scratch + shim.VictimShimOff);
 
+    arch.suppressSyscallRestart(victim);
     try ptrace_mod.setRegs(victim, saved);
 }
 

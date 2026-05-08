@@ -79,3 +79,5 @@ pub fn setupShimRegs(regs: *UserRegsStruct, shim_addr: usize) void {
     regs.rip = shim_addr;
     regs.orig_rax = @bitCast(@as(i64, -1));
 }
+
+pub fn suppressSyscallRestart(_: i32) void {}
