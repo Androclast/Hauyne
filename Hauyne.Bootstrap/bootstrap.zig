@@ -103,6 +103,14 @@ fn loadPayload(param: ?*anyopaque) void {
         return;
     }
 
+    var path_log_buf: [4200]u8 = undefined;
+    const ap = assembly_path.?;
+    const ap_len = p.charTLen(ap);
+    const msg_prefix = "hauyne: assembly_path=";
+    @memcpy(path_log_buf[0..msg_prefix.len], msg_prefix);
+    @memcpy(path_log_buf[msg_prefix.len..][0..ap_len], ap[0..ap_len]);
+    p.appendLog(log_path_u8, path_log_buf[0 .. msg_prefix.len + ap_len]);
+
     const config_path = rc_mod.synthesize(&config_buf) orelse {
         p.appendLog(log_path_u8, "hauyne: synthesize runtimeconfig failed");
         return;
