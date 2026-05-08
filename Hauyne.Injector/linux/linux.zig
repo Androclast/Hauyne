@@ -86,10 +86,7 @@ pub fn inject(
 
     try runVictimShim(victim, saved, scratch + shim.VictimShimOff);
 
-    arch.suppressSyscallRestart(victim);
-    var restored = saved;
-    arch.fixupSavedRegs(&restored);
-    try ptrace_mod.setRegs(victim, restored);
+    try ptrace_mod.setRegs(victim, saved);
 }
 
 fn bootstrapMmap(pid: i32, saved: UserRegsStruct) !usize {

@@ -5,7 +5,6 @@
 // Mozilla Public License, v. 2.0.
 
 const std = @import("std");
-const ptrace_mod = @import("../ptrace.zig");
 
 pub const UserRegsStruct = extern struct {
     regs: [31]u64,
@@ -55,14 +54,4 @@ pub fn setupShimRegs(regs: *UserRegsStruct, shim_addr: usize) void {
     regs.pc = shim_addr;
 }
 
-pub fn suppressSyscallRestart(pid: i32) void {
-    const NT_ARM_SYSTEM_CALL: usize = 0x404;
-    var syscallno: c_int = -1;
-    var iov = ptrace_mod.Iovec{ .base = @ptrCast(&syscallno), .len = @sizeOf(c_int) };
-    _ = ptrace_mod.ptrace(ptrace_mod.PTRACE_SETREGSET, pid, NT_ARM_SYSTEM_CALL, @intFromPtr(&iov));
-}
-
-pub fn fixupSavedRegs(regs: *UserRegsStruct) void {
-    regs.pc += 4;
-    regs.regs[0] = @bitCast(@as(i64, -4));
-}
+pub fn suppressSyscallRestart(_: i32) void {}

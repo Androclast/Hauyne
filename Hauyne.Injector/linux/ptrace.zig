@@ -31,7 +31,7 @@ pub const NT_PRSTATUS: c_int = 1;
 pub const SIGTRAP: c_int = 5;
 pub const ESRCH: c_int = 3;
 
-pub const Iovec = extern struct {
+const Iovec = extern struct {
     base: [*]u8,
     len: usize,
 };
