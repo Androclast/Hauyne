@@ -4,6 +4,7 @@
 // This Source Code Form is "Incompatible With Secondary Licenses", as defined by the
 // Mozilla Public License, v. 2.0.
 
+const std = @import("std");
 const t = @import("types/common.zig");
 const win = @import("types/windows.zig");
 const lin = @import("types/linux.zig");
@@ -126,7 +127,9 @@ fn loadPayload(param: ?*anyopaque) void {
 
     rc = load_asm(assembly_path.?, null, null);
     if (rc != 0) {
-        p.appendLog(log_path_u8, "hauyne: load_asm failed");
+        var rc_buf: [64]u8 = undefined;
+        const rc_msg = std.fmt.bufPrint(&rc_buf, "hauyne: load_asm failed (rc=0x{x})", .{@as(u32, @bitCast(rc))}) catch "hauyne: load_asm failed";
+        p.appendLog(log_path_u8, rc_msg);
         return;
     }
 
