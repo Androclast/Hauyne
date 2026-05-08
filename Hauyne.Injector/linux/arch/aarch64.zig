@@ -14,7 +14,7 @@ pub const UserRegsStruct = extern struct {
 };
 
 pub const SYS_mmap: u64 = 222;
-pub const syscall_insn_size: u64 = 4;
+pub const syscall_insn_size: u64 = 0;
 
 pub const idle_syscalls = [_]i64{
     73,  // ppoll (poll doesn't exist on aarch64)
@@ -41,7 +41,6 @@ pub fn getSyscallResult(regs: UserRegsStruct) u64 {
 }
 
 pub fn setupMmapRegs(regs: *UserRegsStruct, scratch_size: u64, prot: u64, flags: u64) void {
-    regs.pc -= 4;
     regs.regs[8] = SYS_mmap;
     regs.regs[0] = 0;
     regs.regs[1] = scratch_size;
