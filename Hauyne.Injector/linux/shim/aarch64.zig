@@ -47,15 +47,14 @@ pub fn emit(
     }
     // zig fmt: on
 
-    //   FD 7B BE A9                    stp x29, x30, [sp, #-32]!
-    //   FD 03 00 91                    mov x29, sp
+    //   FF 43 00 D1                    sub sp, sp, #16          ; handle scratch (no frame pointer)
     //   [imm64 so_path]                movz+movk x0, so_path
     //   41 00 80 D2                    mov x1, #2              ; RTLD_NOW
     //   [imm64 dlopen]                 movz+movk x9, dlopen
     //   20 01 3F D6                    blr x9
-    //   60 02 00 B4                    cbz x0, .done (skip dlsym+call)
-    //   E0 07 00 F9                    str x0, [sp, #8]
-    //   E0 07 40 F9                    ldr x0, [sp, #8]
+    //   40 02 00 B4                    cbz x0, .done (skip dlsym+call)
+    //   E0 03 00 F9                    str x0, [sp]
+    //   E0 03 40 F9                    ldr x0, [sp]
     //   [imm64 symbol]                 movz+movk x1, "hauyne_start"
     //   [imm64 dlsym]                  movz+movk x9, dlsym
     //   20 01 3F D6                    blr x9
@@ -64,21 +63,20 @@ pub fn emit(
     //   [imm64 payload]                movz+movk x0, payload_path   ; may be 0 fallback to null
     //   20 01 3F D6                    blr x9
     // .done:
-    //   FD 7B C2 A8                    ldp x29, x30, [sp], #32
+    //   A8 0B 80 D2                    mov x8, #93              ; SYS_exit (thread only)
     //   E0 03 1F AA                    mov x0, xzr
-    //   C0 03 5F D6                    ret
+    //   01 00 00 D4                    svc #0
     // zig fmt: off
     {
         var o: usize = shim.PayloadShimOff;
-        page[o] = 0xFD; o += 1; page[o] = 0x7B; o += 1; page[o] = 0xBE; o += 1; page[o] = 0xA9; o += 1;
-        page[o] = 0xFD; o += 1; page[o] = 0x03; o += 1; page[o] = 0x00; o += 1; page[o] = 0x91; o += 1;
+        page[o] = 0xFF; o += 1; page[o] = 0x43; o += 1; page[o] = 0x00; o += 1; page[o] = 0xD1; o += 1;
         writeImm64(page, &o, 0, path_addr);
         page[o] = 0x41; o += 1; page[o] = 0x00; o += 1; page[o] = 0x80; o += 1; page[o] = 0xD2; o += 1;
         writeImm64(page, &o, 9, @intCast(dlopen_addr));
         page[o] = 0x20; o += 1; page[o] = 0x01; o += 1; page[o] = 0x3F; o += 1; page[o] = 0xD6; o += 1;
-        page[o] = 0x60; o += 1; page[o] = 0x02; o += 1; page[o] = 0x00; o += 1; page[o] = 0xB4; o += 1;
-        page[o] = 0xE0; o += 1; page[o] = 0x07; o += 1; page[o] = 0x00; o += 1; page[o] = 0xF9; o += 1;
-        page[o] = 0xE0; o += 1; page[o] = 0x07; o += 1; page[o] = 0x40; o += 1; page[o] = 0xF9; o += 1;
+        page[o] = 0x40; o += 1; page[o] = 0x02; o += 1; page[o] = 0x00; o += 1; page[o] = 0xB4; o += 1;
+        page[o] = 0xE0; o += 1; page[o] = 0x03; o += 1; page[o] = 0x00; o += 1; page[o] = 0xF9; o += 1;
+        page[o] = 0xE0; o += 1; page[o] = 0x03; o += 1; page[o] = 0x40; o += 1; page[o] = 0xF9; o += 1;
         writeImm64(page, &o, 1, symbol_addr);
         writeImm64(page, &o, 9, @intCast(dlsym_addr));
         page[o] = 0x20; o += 1; page[o] = 0x01; o += 1; page[o] = 0x3F; o += 1; page[o] = 0xD6; o += 1;
@@ -86,9 +84,9 @@ pub fn emit(
         page[o] = 0xE9; o += 1; page[o] = 0x03; o += 1; page[o] = 0x00; o += 1; page[o] = 0xAA; o += 1;
         writeImm64(page, &o, 0, payload_addr);
         page[o] = 0x20; o += 1; page[o] = 0x01; o += 1; page[o] = 0x3F; o += 1; page[o] = 0xD6; o += 1;
-        page[o] = 0xFD; o += 1; page[o] = 0x7B; o += 1; page[o] = 0xC2; o += 1; page[o] = 0xA8; o += 1;
+        page[o] = 0xA8; o += 1; page[o] = 0x0B; o += 1; page[o] = 0x80; o += 1; page[o] = 0xD2; o += 1;
         page[o] = 0xE0; o += 1; page[o] = 0x03; o += 1; page[o] = 0x1F; o += 1; page[o] = 0xAA; o += 1;
-        page[o] = 0xC0; o += 1; page[o] = 0x03; o += 1; page[o] = 0x5F; o += 1; page[o] = 0xD6; o += 1;
+        page[o] = 0x01; o += 1; page[o] = 0x00; o += 1; page[o] = 0x00; o += 1; page[o] = 0xD4; o += 1;
     }
     // zig fmt: on
 }
