@@ -61,3 +61,8 @@ pub fn suppressSyscallRestart(pid: i32) void {
     var iov = ptrace_mod.Iovec{ .base = @ptrCast(&syscallno), .len = @sizeOf(c_int) };
     _ = ptrace_mod.ptrace(ptrace_mod.PTRACE_SETREGSET, pid, NT_ARM_SYSTEM_CALL, @intFromPtr(&iov));
 }
+
+pub fn fixupSavedRegs(regs: *UserRegsStruct) void {
+    regs.pc += 4;
+    regs.regs[0] = @bitCast(@as(i64, -4));
+}

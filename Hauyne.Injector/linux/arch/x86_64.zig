@@ -81,3 +81,5 @@ pub fn setupShimRegs(regs: *UserRegsStruct, shim_addr: usize) void {
 }
 
 pub fn suppressSyscallRestart(_: i32) void {}
+
+pub fn fixupSavedRegs(_: *UserRegsStruct) void {}
