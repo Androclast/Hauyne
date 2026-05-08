@@ -1,6 +1,6 @@
 # Hauyne
 
-Cross-platform, Cross-Arch .NET to .NET injector. Build in Zig.
+Cross-platform, Cross-Arch .NET to .NET injector. Built with Zig.
 
 Targets running .NET 5+ processes via hostfxr, injects into the default AssemblyLoadContext.
 
