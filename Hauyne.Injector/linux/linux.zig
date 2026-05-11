@@ -28,6 +28,22 @@ const MAP_ANONYMOUS: u64 = 0x20;
 
 var debug: bool = false;
 
+const SIG_BLOCK: c_int = 0;
+const SIG_UNBLOCK: c_int = 1;
+const SIGUSR1: c_int = 10;
+const SIGUSR2: c_int = 12;
+
+const sigset_t = extern struct { val: [32]u32 = .{0} ** 32 };
+const timespec_t = extern struct { sec: c_long, nsec: c_long };
+
+extern "c" fn sigprocmask(how: c_int, set: *const sigset_t, oldset: ?*sigset_t) callconv(.c) c_int;
+extern "c" fn sigtimedwait(set: *const sigset_t, info: ?*anyopaque, timeout: *const timespec_t) callconv(.c) c_int;
+
+fn sigaddset(set: *sigset_t, sig: c_int) void {
+    const s: u32 = @intCast(sig - 1);
+    set.val[s / 32] |= @as(u32, 1) << @intCast(s % 32);
+}
+
 pub fn inject(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -36,11 +52,16 @@ pub fn inject(
     payload_path: ?[]const u8,
     type_name: ?[]const u8,
     method_name: ?[]const u8,
-) !void {
+) !bool {
     debug = blk: {
         const val = std.c.getenv("HAUYNE_DEBUG") orelse break :blk false;
         break :blk val[0] == '1';
     };
+
+    var mask = sigset_t{};
+    sigaddset(&mask, SIGUSR1);
+    sigaddset(&mask, SIGUSR2);
+    _ = sigprocmask(SIG_BLOCK, &mask, null);
 
     const victim = try victim_mod.pickVictimThread(io, allocator, tgid);
 
@@ -81,12 +102,21 @@ pub fn inject(
     const scratch = try bootstrapMmap(victim, saved);
     if (debug) std.debug.print("[hauyne] scratch=0x{x}\n", .{scratch});
 
-    var page = shim.buildScratchPage(so_path, payload_path, type_name, method_name, dlopen_addr, dlsym_addr, pthread_create_addr, pthread_detach_addr, scratch);
+    const self_pid: i32 = @intCast(std.posix.system.getpid());
+    var page = shim.buildScratchPage(so_path, payload_path, type_name, method_name, dlopen_addr, dlsym_addr, pthread_create_addr, pthread_detach_addr, scratch, self_pid);
     try ptrace_mod.writeMemory(victim, scratch, &page);
 
     try runVictimShim(victim, saved, scratch + shim.VictimShimOff);
 
     try ptrace_mod.setRegs(victim, saved);
+
+    const timeout = timespec_t{ .sec = 5, .nsec = 0 };
+    const sig = sigtimedwait(&mask, null, &timeout);
+    _ = sigprocmask(SIG_UNBLOCK, &mask, null);
+
+    if (sig == SIGUSR1) return true;
+    if (sig == SIGUSR2) return false;
+    return error.BootstrapTimeout;
 }
 
 fn bootstrapMmap(pid: i32, saved: UserRegsStruct) !usize {

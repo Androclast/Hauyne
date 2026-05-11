@@ -25,6 +25,7 @@ extern "kernel32" fn GetModuleHandleW(lpModuleName: ?[*:0]const u16) callconv(CC
 extern "kernel32" fn GetProcAddress(hModule: HMODULE, lpProcName: [*:0]const u8) callconv(CC) ?*anyopaque;
 extern "kernel32" fn LoadLibraryW(lpLibFileName: [*:0]const u16) callconv(CC) ?HMODULE;
 extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) callconv(CC) DWORD;
+extern "kernel32" fn GetExitCodeThread(hThread: HANDLE, lpExitCode: *DWORD) callconv(CC) BOOL;
 extern "kernel32" fn CloseHandle(hObject: HANDLE) callconv(CC) BOOL;
 extern "kernel32" fn CreateToolhelp32Snapshot(dwFlags: DWORD, th32ProcessID: DWORD) callconv(CC) HANDLE;
 extern "kernel32" fn Module32FirstW(hSnapshot: HANDLE, lpme: *MODULEENTRY32W) callconv(CC) BOOL;
@@ -65,7 +66,7 @@ pub fn inject(
     payload_path: ?[]const u8,
     type_name: ?[]const u8,
     method_name: ?[]const u8,
-) !void {
+) !bool {
     const path_utf16 = try std.unicode.utf8ToUtf16LeAllocZ(allocator, dll_path);
     defer allocator.free(path_utf16);
 
@@ -134,6 +135,10 @@ pub fn inject(
 
     if (WaitForSingleObject(call_thread, 5000) == WAIT_TIMEOUT)
         return error.PayloadTimeout;
+
+    var exit_code: DWORD = 0;
+    _ = GetExitCodeThread(call_thread, &exit_code);
+    return exit_code == 0;
 }
 
 fn buildTripleUtf16(

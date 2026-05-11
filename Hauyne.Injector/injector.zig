@@ -90,16 +90,26 @@ pub fn main(init: std.process.Init) u8 {
 
     if (is_windows) {
         const windows = @import("windows.zig");
-        windows.inject(allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name) catch |err| {
+        const payload_ok = windows.inject(allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name) catch |err| {
             std.debug.print("Injection failed: {}\n", .{err});
             return 1;
         };
+        if (!payload_ok) {
+            std.debug.print("Injected into PID {d}, but payload failed to load\n", .{pid});
+            printLastLogLine(allocator, bootstrap_path);
+            return 1;
+        }
     } else if (builtin.os.tag == .linux) {
         const linux = @import("linux/linux.zig");
-        linux.inject(io, allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name) catch |err| {
+        const payload_ok = linux.inject(io, allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name) catch |err| {
             std.debug.print("Injection failed: {}\n", .{err});
             return 1;
         };
+        if (!payload_ok) {
+            std.debug.print("Injected into PID {d}, but payload failed to load\n", .{pid});
+            printLastLogLine(allocator, bootstrap_path);
+            return 1;
+        }
     } else {
         std.debug.print("Unsupported platform\n", .{});
         return 1;
@@ -107,6 +117,21 @@ pub fn main(init: std.process.Init) u8 {
 
     println(allocator, "Injected into PID {}\n", .{pid});
     return 0;
+}
+
+const fseek = @extern(*const fn (*std.c.FILE, c_long, c_int) callconv(.c) c_int, .{ .name = "fseek" });
+
+fn printLastLogLine(allocator: std.mem.Allocator, bootstrap_path: []const u8) void {
+    const dir = std.fs.path.dirname(bootstrap_path) orelse ".";
+    const log_path_z = std.fs.path.joinZ(allocator, &.{ dir, "hauyne.log" }) catch return;
+    const fp = std.c.fopen(log_path_z, "r") orelse return;
+    defer _ = std.c.fclose(fp);
+    _ = fseek(fp, -256, 2);
+    var buf: [256]u8 = undefined;
+    const n = std.c.fread(&buf, 1, buf.len, fp);
+    const text = std.mem.trimEnd(u8, buf[0..n], "\n");
+    const last = if (std.mem.lastIndexOfScalar(u8, text, '\n')) |i| text[i + 1 ..] else text;
+    if (last.len > 0) std.debug.print("  {s}\n", .{last});
 }
 
 fn resolveTarget(io: std.Io, allocator: std.mem.Allocator, spec: []const u8) !u32 {

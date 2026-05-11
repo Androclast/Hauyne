@@ -30,6 +30,7 @@ pub fn buildScratchPage(
     pthread_create_addr: usize,
     pthread_detach_addr: usize,
     scratch_base: usize,
+    injector_pid: i32,
 ) [ScratchSize]u8 {
     var page = std.mem.zeroes([ScratchSize]u8);
 
@@ -63,13 +64,18 @@ pub fn buildScratchPage(
 
     const any_custom = payload_path != null or type_name != null or method_name != null;
 
-    const pthread_handle_addr: u64 = @intCast(scratch_base);
+    // Header at offset 0x00: { payload_ptr: u64, injector_pid: i32 }
+    const payload_ptr: u64 = if (any_custom) @intCast(scratch_base + PayloadOffset) else 0;
+    std.mem.writeInt(u64, page[0..8], payload_ptr, .little);
+    std.mem.writeInt(i32, page[8..12], injector_pid, .little);
+
+    const pthread_handle_addr: u64 = @intCast(scratch_base + 16);
     const path_addr: u64 = @intCast(scratch_base + PathOffset);
-    const payload_addr: u64 = if (any_custom) @intCast(scratch_base + PayloadOffset) else 0;
+    const hauyne_arg: u64 = @intCast(scratch_base);
     const symbol_addr: u64 = @intCast(scratch_base + SymbolOffset);
     const payload_shim_addr: u64 = @intCast(scratch_base + PayloadShimOff);
 
-    arch.emit(&page, pthread_handle_addr, path_addr, payload_addr, symbol_addr, payload_shim_addr, dlopen_addr, dlsym_addr, pthread_create_addr, pthread_detach_addr);
+    arch.emit(&page, pthread_handle_addr, path_addr, hauyne_arg, symbol_addr, payload_shim_addr, dlopen_addr, dlsym_addr, pthread_create_addr, pthread_detach_addr);
 
     return page;
 }
