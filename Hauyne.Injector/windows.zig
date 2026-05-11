@@ -41,6 +41,7 @@ const MEM_RESERVE: DWORD = 0x2000;
 const MEM_RELEASE: DWORD = 0x8000;
 
 const PAGE_READWRITE: DWORD = 0x04;
+const WAIT_TIMEOUT: DWORD = 0x102;
 
 const TH32CS_SNAPMODULE: DWORD = 0x00000008;
 
@@ -116,7 +117,8 @@ pub fn inject(
 
     const load_thread = CreateRemoteThread(hProcess, null, 0, load_library_addr, bs_remote, 0, null) orelse
         return error.CreateRemoteThreadFailed;
-    _ = WaitForSingleObject(load_thread, 5000);
+    if (WaitForSingleObject(load_thread, 5000) == WAIT_TIMEOUT)
+        return error.LoadLibraryTimeout;
     _ = CloseHandle(load_thread);
 
     const target_base = try findBootstrapBaseInTarget(pid, dll_path);
@@ -130,7 +132,8 @@ pub fn inject(
         return error.CreateRemoteThreadFailed;
     defer _ = CloseHandle(call_thread);
 
-    _ = WaitForSingleObject(call_thread, 5000);
+    if (WaitForSingleObject(call_thread, 5000) == WAIT_TIMEOUT)
+        return error.PayloadTimeout;
 }
 
 fn buildTripleUtf16(
