@@ -4,6 +4,7 @@
 // This Source Code Form is "Incompatible With Secondary Licenses", as defined by the
 // Mozilla Public License, v. 2.0.
 
+const std = @import("std");
 const t = @import("types/common.zig");
 const win = @import("types/windows.zig");
 const lin = @import("types/linux.zig");
@@ -14,6 +15,15 @@ var hostfxr_init: ?t.HostfxrInitFn = null;
 var hostfxr_get_delegate: ?t.HostfxrGetDelegateFn = null;
 var hostfxr_close: ?t.HostfxrCloseFn = null;
 var g_hModule: ?win.HMODULE = null;
+
+fn logRc(log_path: []const u8, comptime msg: []const u8, rc: i32) void {
+    var buf: [128]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, msg ++ " (rc=0x{x:0>8})", .{@as(u32, @bitCast(rc))}) catch {
+        p.appendLog(log_path, msg);
+        return;
+    };
+    p.appendLog(log_path, s);
+}
 
 fn castFnPtr(comptime T: type, ptr: ?*anyopaque) ?T {
     return if (ptr) |q| @ptrCast(@alignCast(q)) else null;
@@ -111,7 +121,7 @@ fn loadPayload(param: ?*anyopaque) void {
     var ctx: t.HostfxrHandle = null;
     var rc = hostfxr_init.?(config_path, null, &ctx);
     if (ctx == null) {
-        p.appendLog(log_path_u8, "hauyne: ctx is null");
+        logRc(log_path_u8, "hauyne: hostfxr_init failed, ctx is null", rc);
         return;
     }
     defer _ = hostfxr_close.?(ctx);
@@ -119,21 +129,21 @@ fn loadPayload(param: ?*anyopaque) void {
     var load_asm_ptr: ?*anyopaque = null;
     rc = hostfxr_get_delegate.?(ctx, t.HDT_LOAD_ASSEMBLY, &load_asm_ptr);
     if (rc != 0 or load_asm_ptr == null) {
-        p.appendLog(log_path_u8, "hauyne: get_delegate(load_assembly) failed");
+        logRc(log_path_u8, "hauyne: get_delegate(load_assembly) failed", rc);
         return;
     }
     const load_asm: t.LoadAssemblyFn = @ptrCast(@alignCast(load_asm_ptr.?));
 
     rc = load_asm(assembly_path.?, null, null);
     if (rc != 0) {
-        p.appendLog(log_path_u8, "hauyne: load_asm failed");
+        logRc(log_path_u8, "hauyne: load_asm failed", rc);
         return;
     }
 
     var get_fn_ptr: ?*anyopaque = null;
     rc = hostfxr_get_delegate.?(ctx, t.HDT_GET_FUNCTION_POINTER, &get_fn_ptr);
     if (rc != 0 or get_fn_ptr == null) {
-        p.appendLog(log_path_u8, "hauyne: get_delegate(get_function_pointer) failed");
+        logRc(log_path_u8, "hauyne: get_delegate(get_function_pointer) failed", rc);
         return;
     }
     const get_fn: t.GetFunctionPointerFn = @ptrCast(@alignCast(get_fn_ptr.?));
@@ -148,7 +158,7 @@ fn loadPayload(param: ?*anyopaque) void {
         &entry_ptr,
     );
     if (rc != 0 or entry_ptr == null) {
-        p.appendLog(log_path_u8, "hauyne: get_function_pointer(Initialize) failed");
+        logRc(log_path_u8, "hauyne: get_function_pointer(Initialize) failed", rc);
         return;
     }
 
