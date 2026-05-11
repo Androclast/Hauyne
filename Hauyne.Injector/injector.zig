@@ -88,30 +88,25 @@ pub fn main(init: std.process.Init) u8 {
         return 1;
     };
 
-    if (is_windows) {
+    const payload_ok = if (is_windows) blk: {
         const windows = @import("windows.zig");
-        const payload_ok = windows.inject(allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name) catch |err| {
-            std.debug.print("Injection failed: {}\n", .{err});
-            return 1;
-        };
-        if (!payload_ok) {
-            std.debug.print("Injected into PID {d}, but payload failed to load\n", .{pid});
-            printLastLogLine(allocator, bootstrap_path);
-            return 1;
-        }
-    } else if (builtin.os.tag == .linux) {
+        break :blk windows.inject(allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name);
+    } else if (builtin.os.tag == .linux) blk: {
         const linux = @import("linux/linux.zig");
-        const payload_ok = linux.inject(io, allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name) catch |err| {
-            std.debug.print("Injection failed: {}\n", .{err});
-            return 1;
-        };
-        if (!payload_ok) {
-            std.debug.print("Injected into PID {d}, but payload failed to load\n", .{pid});
-            printLastLogLine(allocator, bootstrap_path);
-            return 1;
-        }
+        break :blk linux.inject(io, allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name);
     } else {
         std.debug.print("Unsupported platform\n", .{});
+        return 1;
+    };
+
+    const ok = payload_ok catch |err| {
+        std.debug.print("Injection failed: {}\n", .{err});
+        return 1;
+    };
+
+    if (!ok) {
+        std.debug.print("Injected into PID {d}, but payload failed to load\n", .{pid});
+        printLastLogLine(allocator, bootstrap_path);
         return 1;
     }
 
@@ -360,7 +355,6 @@ fn isDotNetProcessLinux(io: std.Io, allocator: std.mem.Allocator, pid: u32, inac
 
     return false;
 }
-
 
 fn isDotNetProcessWindows(pid: u32) bool {
     const windows = std.os.windows;
