@@ -31,7 +31,7 @@ pub fn pickVictimThread(io: std.Io, allocator: std.mem.Allocator, tgid: i32) !i3
         const syscall_path = std.fmt.allocPrint(allocator, "/proc/{d}/task/{d}/syscall", .{ tgid, tid }) catch continue;
         defer allocator.free(syscall_path);
 
-        const syscall_text = readProcFileAlloc(allocator, syscall_path) catch continue;
+        const syscall_text = std.Io.Dir.cwd().readFileAlloc(io, syscall_path, allocator, std.Io.Limit.limited(4096)) catch continue;
 
         const trimmed = std.mem.trimEnd(u8, syscall_text, "\n\r \t");
         if (std.mem.eql(u8, trimmed, "running")) continue;
@@ -52,7 +52,7 @@ pub fn pickVictimThread(io: std.Io, allocator: std.mem.Allocator, tgid: i32) !i3
         const status_path = std.fmt.allocPrint(allocator, "/proc/{d}/task/{d}/status", .{ tgid, tid }) catch continue;
         defer allocator.free(status_path);
 
-        const status_text = readProcFileAlloc(allocator, status_path) catch continue;
+        const status_text = std.Io.Dir.cwd().readFileAlloc(io, status_path, allocator, std.Io.Limit.limited(4096)) catch continue;
 
         var lines = std.mem.splitScalar(u8, status_text, '\n');
         while (lines.next()) |line| {
@@ -65,17 +65,4 @@ pub fn pickVictimThread(io: std.Io, allocator: std.mem.Allocator, tgid: i32) !i3
     }
 
     return tgid;
-}
-
-fn readProcFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0);
-    defer _ = std.c.close(fd);
-    var buf = try allocator.alloc(u8, 4096);
-    var n: usize = 0;
-    while (n < buf.len) {
-        const r = try std.posix.read(fd, buf[n..]);
-        if (r == 0) break;
-        n += r;
-    }
-    return buf[0..n];
 }
