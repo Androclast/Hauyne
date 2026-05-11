@@ -31,7 +31,8 @@ pub fn pickVictimThread(io: std.Io, allocator: std.mem.Allocator, tgid: i32) !i3
         const syscall_path = std.fmt.allocPrint(allocator, "/proc/{d}/task/{d}/syscall", .{ tgid, tid }) catch continue;
         defer allocator.free(syscall_path);
 
-        const syscall_text = std.Io.Dir.cwd().readFileAlloc(io, syscall_path, allocator, std.Io.Limit.limited(4096)) catch continue;
+        const procfs = @import("procfs.zig");
+        const syscall_text = procfs.readFileAlloc(allocator, syscall_path) catch continue;
 
         const trimmed = std.mem.trimEnd(u8, syscall_text, "\n\r \t");
         if (std.mem.eql(u8, trimmed, "running")) continue;
@@ -52,7 +53,7 @@ pub fn pickVictimThread(io: std.Io, allocator: std.mem.Allocator, tgid: i32) !i3
         const status_path = std.fmt.allocPrint(allocator, "/proc/{d}/task/{d}/status", .{ tgid, tid }) catch continue;
         defer allocator.free(status_path);
 
-        const status_text = std.Io.Dir.cwd().readFileAlloc(io, status_path, allocator, std.Io.Limit.limited(4096)) catch continue;
+        const status_text = procfs.readFileAlloc(allocator, status_path) catch continue;
 
         var lines = std.mem.splitScalar(u8, status_text, '\n');
         while (lines.next()) |line| {
