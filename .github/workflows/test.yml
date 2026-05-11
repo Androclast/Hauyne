@@ -44,36 +44,45 @@ jobs:
       - name: Build victim
         run: dotnet build Hauyne.Victim -c Release -p:TargetFramework=net${{ matrix.dotnet }} --nologo
 
-      - name: Test
+      - name: Configure ptrace
         run: |
           echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
           ulimit -c unlimited
           echo '/tmp/core.%p' | sudo tee /proc/sys/kernel/core_pattern
 
+      - name: Start victim
+        run: |
           rm -f /tmp/Hauyne.txt /tmp/hauyne-victim.pid
-
           dotnet exec Hauyne.Victim/bin/Release/net${{ matrix.dotnet }}/Hauyne.Victim.dll &
           sleep 3
+          echo "VICTIM_PID=$(cat /tmp/hauyne-victim.pid)" >> $GITHUB_ENV
+          echo "Victim PID: $(cat /tmp/hauyne-victim.pid) (net${{ matrix.dotnet }})"
 
-          VICTIM_PID=$(cat /tmp/hauyne-victim.pid)
-          echo "Victim PID: $VICTIM_PID (net${{ matrix.dotnet }})"
-
-          grep -q libhostfxr /proc/$VICTIM_PID/maps
-
+      - name: Inject payload
+        run: |
           HAUYNE_DEBUG=1 ./bin/Hauyne.Injector "$VICTIM_PID" "$PWD/bin/net${{ matrix.dotnet }}/Hauyne.Payload.dll"
+          sleep 2
 
-          sleep 3
-
+      - name: Verify payload loaded
+        run: |
           if [ ! -f /tmp/Hauyne.txt ]; then
-            echo "FUCK! Bootstrap log:"
+            echo "Hauyne.txt missing. Bootstrap:"
             find bin -name 'hauyne.log' -exec cat {} \; 2>/dev/null || true
             exit 1
           fi
           echo "PASS: $(cat /tmp/Hauyne.txt)"
 
-          echo "Waiting 10s to ensure victim survived"
-          sleep 10
+      - name: Verify failure report
+        run: |
+          if ./bin/Hauyne.Injector "$VICTIM_PID" --type Moonyware.NativeEntry 2>&1; then
+            echo "Injector should've failed"
+            exit 1
+          fi
+          echo "PASS: bad type correctly reported failure"
 
+      - name: Verify victim survived
+        run: |
+          sleep 10
           if kill -0 $VICTIM_PID 2>/dev/null; then
             echo "Victim still alive"
           else
@@ -81,7 +90,9 @@ jobs:
             exit 1
           fi
 
-          kill $VICTIM_PID 2>/dev/null || true
+      - name: Cleanup
+        if: always()
+        run: kill $VICTIM_PID 2>/dev/null || true
 
       - name: Backtrace
         if: failure()

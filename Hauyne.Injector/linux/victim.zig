@@ -5,6 +5,7 @@
 // Mozilla Public License, v. 2.0.
 
 const std = @import("std");
+const procfs = @import("procfs.zig");
 
 const arch = switch (@import("builtin").cpu.arch) {
     .x86_64 => @import("arch/x86_64.zig"),
@@ -31,7 +32,6 @@ pub fn pickVictimThread(io: std.Io, allocator: std.mem.Allocator, tgid: i32) !i3
         const syscall_path = std.fmt.allocPrint(allocator, "/proc/{d}/task/{d}/syscall", .{ tgid, tid }) catch continue;
         defer allocator.free(syscall_path);
 
-        const procfs = @import("procfs.zig");
         const syscall_text = procfs.readFileAlloc(allocator, syscall_path) catch continue;
 
         const trimmed = std.mem.trimEnd(u8, syscall_text, "\n\r \t");
