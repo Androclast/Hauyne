@@ -31,7 +31,8 @@ pub fn pickVictimThread(io: std.Io, allocator: std.mem.Allocator, tgid: i32) !i3
         const syscall_path = std.fmt.allocPrint(allocator, "/proc/{d}/task/{d}/syscall", .{ tgid, tid }) catch continue;
         defer allocator.free(syscall_path);
 
-        const syscall_text = readProcFileAlloc(allocator, syscall_path) catch continue;
+        const procfs = @import("procfs.zig");
+        const syscall_text = procfs.readFileAlloc(allocator, syscall_path) catch continue;
 
         const trimmed = std.mem.trimEnd(u8, syscall_text, "\n\r \t");
         if (std.mem.eql(u8, trimmed, "running")) continue;
@@ -49,33 +50,16 @@ pub fn pickVictimThread(io: std.Io, allocator: std.mem.Allocator, tgid: i32) !i3
         }
         if (!found_idle) continue;
 
-        const status_path = std.fmt.allocPrint(allocator, "/proc/{d}/task/{d}/status", .{ tgid, tid }) catch continue;
-        defer allocator.free(status_path);
+        const stat_path = std.fmt.allocPrint(allocator, "/proc/{d}/task/{d}/stat", .{ tgid, tid }) catch continue;
+        defer allocator.free(stat_path);
 
-        const status_text = readProcFileAlloc(allocator, status_path) catch continue;
+        const stat_text = procfs.readFileAlloc(allocator, stat_path) catch continue;
 
-        var lines = std.mem.splitScalar(u8, status_text, '\n');
-        while (lines.next()) |line| {
-            if (!std.mem.startsWith(u8, line, "State:")) continue;
-            if (std.mem.indexOf(u8, line, "S (sleeping)") != null or
-                std.mem.indexOf(u8, line, "D (disk sleep)") != null)
-                return tid;
-            break;
-        }
+        const last_paren = std.mem.lastIndexOfScalar(u8, stat_text, ')') orelse continue;
+        const rest = stat_text[last_paren + 1 ..];
+        const state = std.mem.trimStart(u8, rest, " ");
+        if (state.len > 0 and state[0] == 'S') return tid;
     }
 
     return tgid;
-}
-
-fn readProcFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0);
-    defer _ = std.c.close(fd);
-    var buf = try allocator.alloc(u8, 4096);
-    var n: usize = 0;
-    while (n < buf.len) {
-        const r = try std.posix.read(fd, buf[n..]);
-        if (r == 0) break;
-        n += r;
-    }
-    return buf[0..n];
 }

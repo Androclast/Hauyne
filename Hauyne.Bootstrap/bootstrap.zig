@@ -55,10 +55,10 @@ fn ownModulePath(buf: []t.CharT) ?[]const t.CharT {
     return info.dli_fname[0..p.charTLen(info.dli_fname)];
 }
 
-fn loadPayload(param: ?*anyopaque) void {
+fn loadPayload(param: ?*anyopaque) bool {
     if (!loadHostfxr()) {
         p.appendLog("hauyne.log", "hauyne: load_hostfxr failed");
-        return;
+        return false;
     }
 
     const sep: t.CharT = if (t.is_windows) '\\' else '/';
@@ -90,7 +90,7 @@ fn loadPayload(param: ?*anyopaque) void {
         if (assembly_opt) |ap| break :blk ap[0..p.charTLen(ap)];
         break :blk ownModulePath(&source_buf) orelse {
             p.appendLog("hauyne.log", "hauyne: ownModulePath failed");
-            return;
+            return false;
         };
     };
 
@@ -109,12 +109,12 @@ fn loadPayload(param: ?*anyopaque) void {
 
     if (assembly_path == null) {
         p.appendLog(log_path_u8, "hauyne: failed to determine payload path");
-        return;
+        return false;
     }
 
     const config_path = rc_mod.synthesize(&config_buf) orelse {
         p.appendLog(log_path_u8, "hauyne: synthesize runtimeconfig failed");
-        return;
+        return false;
     };
     defer rc_mod.unlink(config_path);
 
@@ -122,7 +122,7 @@ fn loadPayload(param: ?*anyopaque) void {
     var rc = hostfxr_init.?(config_path, null, &ctx);
     if (ctx == null) {
         logRc(log_path_u8, "hauyne: hostfxr_init failed, ctx is null", rc);
-        return;
+        return false;
     }
     defer _ = hostfxr_close.?(ctx);
 
@@ -130,21 +130,21 @@ fn loadPayload(param: ?*anyopaque) void {
     rc = hostfxr_get_delegate.?(ctx, t.HDT_LOAD_ASSEMBLY, &load_asm_ptr);
     if (rc != 0 or load_asm_ptr == null) {
         logRc(log_path_u8, "hauyne: get_delegate(load_assembly) failed", rc);
-        return;
+        return false;
     }
     const load_asm: t.LoadAssemblyFn = @ptrCast(@alignCast(load_asm_ptr.?));
 
     rc = load_asm(assembly_path.?, null, null);
     if (rc != 0) {
         logRc(log_path_u8, "hauyne: load_asm failed", rc);
-        return;
+        return false;
     }
 
     var get_fn_ptr: ?*anyopaque = null;
     rc = hostfxr_get_delegate.?(ctx, t.HDT_GET_FUNCTION_POINTER, &get_fn_ptr);
     if (rc != 0 or get_fn_ptr == null) {
         logRc(log_path_u8, "hauyne: get_delegate(get_function_pointer) failed", rc);
-        return;
+        return false;
     }
     const get_fn: t.GetFunctionPointerFn = @ptrCast(@alignCast(get_fn_ptr.?));
 
@@ -159,12 +159,13 @@ fn loadPayload(param: ?*anyopaque) void {
     );
     if (rc != 0 or entry_ptr == null) {
         logRc(log_path_u8, "hauyne: get_function_pointer(Initialize) failed", rc);
-        return;
+        return false;
     }
 
     const entry: t.EntryPointFn = @ptrCast(@alignCast(entry_ptr.?));
     entry();
     p.appendLog(log_path_u8, "hauyne: payload loaded ok");
+    return true;
 }
 
 const platform_entry = if (t.is_windows) struct {
@@ -178,13 +179,28 @@ const platform_entry = if (t.is_windows) struct {
     }
 
     pub export fn hauyne_start(param: ?*anyopaque) callconv(t.CC) win.DWORD {
-        loadPayload(param);
-        if (g_hModule) |hmod| win.FreeLibraryAndExitThread(hmod, 0);
-        return 0;
+        const ok = loadPayload(param);
+        const code: win.DWORD = if (ok) 0 else 1;
+        if (g_hModule) |hmod| win.FreeLibraryAndExitThread(hmod, code);
+        return code;
     }
 } else struct {
+    const Header = extern struct {
+        payload_ptr: u64,
+        injector_pid: i32,
+    };
+
     pub export fn hauyne_start(param: ?*anyopaque) callconv(t.CC) ?*anyopaque {
-        loadPayload(param);
+        if (param) |raw| {
+            const header: *const Header = @ptrCast(@alignCast(raw));
+            const payload: ?*anyopaque = if (header.payload_ptr != 0) @ptrFromInt(header.payload_ptr) else null;
+            const ok = loadPayload(payload);
+            if (header.injector_pid > 0) {
+                _ = lin.kill(header.injector_pid, if (ok) lin.SIGUSR1 else lin.SIGUSR2);
+            }
+        } else {
+            _ = loadPayload(null);
+        }
         return null;
     }
 };

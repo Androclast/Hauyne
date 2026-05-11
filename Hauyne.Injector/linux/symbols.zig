@@ -20,7 +20,8 @@ pub fn findSymbolInTarget(io: std.Io, allocator: std.mem.Allocator, pid: i32, sy
     const maps_path = try std.fmt.allocPrint(allocator, "/proc/{d}/maps", .{pid});
     defer allocator.free(maps_path);
 
-    const maps_text = try readProcFileAlloc(allocator, maps_path);
+    const procfs = @import("procfs.zig");
+    const maps_text = try procfs.readFileAlloc(allocator, maps_path);
 
     var lines = std.mem.splitScalar(u8, maps_text, '\n');
     while (lines.next()) |line| {
@@ -139,15 +140,3 @@ fn parseMapsRow(line: []const u8) ?MapsRow {
     return .{ .start = start, .offset = offset_str, .path = path_str };
 }
 
-fn readProcFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0);
-    defer _ = std.c.close(fd);
-    var buf = try allocator.alloc(u8, 256 * 1024);
-    var n: usize = 0;
-    while (n < buf.len) {
-        const r = try std.posix.read(fd, buf[n..]);
-        if (r == 0) break;
-        n += r;
-    }
-    return buf[0..n];
-}

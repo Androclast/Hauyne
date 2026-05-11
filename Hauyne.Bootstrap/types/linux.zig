@@ -24,3 +24,7 @@ pub extern "c" fn dlclose(handle: ?*anyopaque) c_int;
 pub extern "c" fn dladdr(addr: ?*anyopaque, info: *DlInfo) c_int;
 pub extern "c" fn pthread_create(thread: *std.c.pthread_t, attr: ?*anyopaque, start_routine: *const fn (?*anyopaque) callconv(CC) ?*anyopaque, arg: ?*anyopaque) c_int;
 pub extern "c" fn pthread_detach(thread: std.c.pthread_t) c_int;
+pub extern "c" fn kill(pid: c_int, sig: c_int) c_int;
+
+pub const SIGUSR1: c_int = 10;
+pub const SIGUSR2: c_int = 12;
