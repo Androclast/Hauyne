@@ -44,6 +44,53 @@ fn sigaddset(set: *sigset_t, sig: c_int) void {
     set.val[s / 32] |= @as(u32, 1) << @intCast(s % 32);
 }
 
+fn validateTargetArch(pid: i32) error{ArchMismatch}!void {
+    var path_buf: [32]u8 = undefined;
+    const exe_path = std.fmt.bufPrint(&path_buf, "/proc/{d}/exe", .{pid}) catch return;
+
+    const fd = std.posix.openat(std.posix.AT.FDCWD, exe_path, .{ .ACCMODE = .RDONLY }, 0) catch return;
+    defer _ = std.c.close(fd);
+
+    var header: [20]u8 = undefined;
+    var n: usize = 0;
+    while (n < header.len) {
+        const r = std.posix.read(fd, header[n..]) catch return;
+        if (r == 0) return;
+        n += r;
+    }
+
+    if (!std.mem.eql(u8, header[0..4], "\x7fELF")) return;
+
+    const endian: std.builtin.Endian = switch (header[5]) {
+        1 => .little,
+        2 => .big,
+        else => return,
+    };
+    const e_machine = std.mem.readInt(u16, header[18..20], endian);
+    const native_machine: u16 = switch (builtin.cpu.arch) {
+        .x86_64 => 62,
+        .aarch64 => 183,
+        else => return,
+    };
+
+    if (e_machine != native_machine) {
+        const target_name: []const u8 = switch (e_machine) {
+            62 => "x86_64",
+            183 => "aarch64",
+            3 => "x86",
+            40 => "arm",
+            else => "unknown",
+        };
+        const self_name = comptime switch (builtin.cpu.arch) {
+            .x86_64 => "x86_64",
+            .aarch64 => "aarch64",
+            else => unreachable,
+        };
+        std.debug.print("Target is {s} but injector is {s}\n", .{ target_name, self_name });
+        return error.ArchMismatch;
+    }
+}
+
 pub fn inject(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -57,6 +104,8 @@ pub fn inject(
         const val = std.c.getenv("HAUYNE_DEBUG") orelse break :blk false;
         break :blk val[0] == '1';
     };
+
+    try validateTargetArch(tgid);
 
     var mask = sigset_t{};
     sigaddset(&mask, SIGUSR1);
