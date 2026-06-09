@@ -5,7 +5,6 @@
 // Mozilla Public License, v. 2.0.
 
 const std = @import("std");
-const procfs = @import("procfs.zig");
 
 const arch = @import("arch.zig").cpu;
 
@@ -28,7 +27,7 @@ pub fn pickVictimThread(io: std.Io, allocator: std.mem.Allocator, tgid: i32) !i3
         const syscall_path = std.fmt.allocPrint(allocator, "/proc/{d}/task/{d}/syscall", .{ tgid, tid }) catch continue;
         defer allocator.free(syscall_path);
 
-        const syscall_text = procfs.readFileAlloc(allocator, syscall_path) catch continue;
+        const syscall_text = std.Io.Dir.cwd().readFileAlloc(io, syscall_path, allocator, std.Io.Limit.limited(4096)) catch continue;
 
         const trimmed = std.mem.trimEnd(u8, syscall_text, "\n\r \t");
         if (std.mem.eql(u8, trimmed, "running")) continue;
@@ -49,7 +48,7 @@ pub fn pickVictimThread(io: std.Io, allocator: std.mem.Allocator, tgid: i32) !i3
         const stat_path = std.fmt.allocPrint(allocator, "/proc/{d}/task/{d}/stat", .{ tgid, tid }) catch continue;
         defer allocator.free(stat_path);
 
-        const stat_text = procfs.readFileAlloc(allocator, stat_path) catch continue;
+        const stat_text = std.Io.Dir.cwd().readFileAlloc(io, stat_path, allocator, std.Io.Limit.limited(4096)) catch continue;
 
         const last_paren = std.mem.lastIndexOfScalar(u8, stat_text, ')') orelse continue;
         const rest = stat_text[last_paren + 1 ..];

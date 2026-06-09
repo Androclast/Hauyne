@@ -28,8 +28,7 @@ pub fn findSymbolsInTarget(
     const maps_path = try std.fmt.allocPrint(allocator, "/proc/{d}/maps", .{pid});
     defer allocator.free(maps_path);
 
-    const procfs = @import("procfs.zig");
-    const maps_text = try procfs.readFileAlloc(allocator, maps_path);
+    const maps_text = try std.Io.Dir.cwd().readFileAlloc(io, maps_path, allocator, std.Io.Limit.limited(8 * 1024 * 1024));
 
     var lines = std.mem.splitScalar(u8, maps_text, '\n');
     while (lines.next()) |line| {

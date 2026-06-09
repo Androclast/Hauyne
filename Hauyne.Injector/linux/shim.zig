@@ -5,7 +5,6 @@
 // Mozilla Public License, v. 2.0.
 
 const std = @import("std");
-const builtin = @import("builtin");
 
 pub const ScratchSize: usize = 0x2000; // 8 KiB (two pages)
 pub const PathOffset: usize = 0x40; // bootstrap .so path           (1984)
