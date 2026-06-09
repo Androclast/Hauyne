@@ -6,6 +6,7 @@
 
 const std = @import("std");
 
+// /proc pseudo-files report st_size=0, so std.Io readFileAlloc returns empty.
 pub fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0);
     defer _ = std.c.close(fd);

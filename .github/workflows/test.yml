@@ -36,7 +36,12 @@ jobs:
           version: 0.16.0
 
       - name: Build
-        run: ./build.sh --zig-targets "${{ matrix.zig-target }}" --no-dotnet
+        run: >-
+          zig build
+          -Dtarget=${{ matrix.zig-target }}
+          -Doptimize=ReleaseFast
+          -Dinjector-optimize=ReleaseSmall
+          --prefix bin
 
       - name: Build payload
         run: dotnet build Hauyne.Payload -c Release -p:TargetFramework=net${{ matrix.dotnet }} --nologo

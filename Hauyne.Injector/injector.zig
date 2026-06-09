@@ -9,8 +9,6 @@ const builtin = @import("builtin");
 
 const is_windows = builtin.os.tag == .windows;
 
-const max_matches = 64;
-
 fn println(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) void {
     const msg = std.fmt.allocPrint(allocator, fmt, args) catch return;
     defer allocator.free(msg);
@@ -23,7 +21,11 @@ pub fn main(init: std.process.Init) u8 {
 
     const args = init.minimal.args.toSlice(allocator) catch return 1;
 
-    if (args.len < 2 or std.mem.eql(u8, args[1], "--help") or std.mem.eql(u8, args[1], "-h")) {
+    const wants_help = for (args) |a| {
+        if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) break true;
+    } else false;
+
+    if (args.len < 2 or wants_help) {
         const usage =
             \\Usage: {s} <process-name|pid> [payload-path] [options]
             \\
@@ -36,7 +38,7 @@ pub fn main(init: std.process.Init) u8 {
             \\Options:
             \\  --type <name>         Fully qualified type name (default: Hauyne.Payload.Entrypoint, Hauyne.Payload)
             \\  --method <name>       Entry method name (default: Initialize)
-            \\  -h, --help            Hello
+            \\  -h, --help            Show this help
             \\
         ;
         println(allocator, usage, .{args[0]});
@@ -65,6 +67,9 @@ pub fn main(init: std.process.Init) u8 {
                 return 1;
             }
             method_name = args[i];
+        } else if (std.mem.startsWith(u8, a, "--")) {
+            std.debug.print("Unknown option: {s}\n", .{a});
+            return 1;
         } else if (payload_path == null) {
             payload_path = a;
         } else {
@@ -144,11 +149,9 @@ fn resolveTarget(io: std.Io, allocator: std.mem.Allocator, spec: []const u8) !u3
         return pid;
     } else |_| {}
 
-    var matches: [max_matches]u32 = undefined;
-    var n: usize = 0;
-    try collectMatches(io, spec, &matches, &n, &inaccessible);
+    const matches = try collectMatches(io, allocator, spec, &inaccessible);
 
-    if (n == 0) {
+    if (matches.len == 0) {
         if (inaccessible > 0) {
             std.debug.print("No process matches '{s}' ({d} process(es) unreadable — try root or ptrace_scope=0)\n", .{ spec, inaccessible });
         } else {
@@ -157,10 +160,8 @@ fn resolveTarget(io: std.Io, allocator: std.mem.Allocator, spec: []const u8) !u3
         return error.NotFound;
     }
 
-    // Compact .NET-valid PIDs over the front of `matches`. If vn == 0 no writes
-    // happen and matches[0..n] stays intact for the "none loaded hostfxr" list.
     var vn: usize = 0;
-    for (matches[0..n]) |pid| {
+    for (matches) |pid| {
         if (isDotNetProcess(io, allocator, pid, &inaccessible) catch false) {
             matches[vn] = pid;
             vn += 1;
@@ -168,8 +169,8 @@ fn resolveTarget(io: std.Io, allocator: std.mem.Allocator, spec: []const u8) !u3
     }
 
     if (vn == 0) {
-        std.debug.print("'{s}' matched {d} process(es) but none loaded hostfxr: ", .{ spec, n });
-        printPidList(matches[0..n]);
+        std.debug.print("'{s}' matched {d} process(es) but none loaded hostfxr: ", .{ spec, matches.len });
+        printPidList(matches);
         return error.NoDotNetMatch;
     }
     if (vn > 1) {
@@ -188,12 +189,13 @@ fn printPidList(pids: []const u32) void {
     std.debug.print("\n", .{});
 }
 
-fn collectMatches(io: std.Io, name: []const u8, out: []u32, count: *usize, inaccessible: *usize) !void {
-    if (is_windows) return collectMatchesWindows(name, out, count);
-    return collectMatchesLinux(io, name, out, count, inaccessible);
+fn collectMatches(io: std.Io, allocator: std.mem.Allocator, name: []const u8, inaccessible: *usize) ![]u32 {
+    if (is_windows) return collectMatchesWindows(allocator, name);
+    return collectMatchesLinux(io, allocator, name, inaccessible);
 }
 
-fn collectMatchesLinux(io: std.Io, name: []const u8, out: []u32, count: *usize, inaccessible: *usize) !void {
+fn collectMatchesLinux(io: std.Io, allocator: std.mem.Allocator, name: []const u8, inaccessible: *usize) ![]u32 {
+    var matches: std.ArrayList(u32) = .empty;
     const self_pid: u32 = @intCast(std.posix.system.getpid());
 
     var proc_dir = try std.Io.Dir.openDirAbsolute(io, "/proc", .{ .iterate = true });
@@ -207,11 +209,10 @@ fn collectMatchesLinux(io: std.Io, name: []const u8, out: []u32, count: *usize, 
         if (pid == self_pid) continue;
 
         if (pidMatchesName(io, pid, name, inaccessible)) {
-            if (count.* >= out.len) return;
-            out[count.*] = pid;
-            count.* += 1;
+            try matches.append(allocator, pid);
         }
     }
+    return matches.items;
 }
 
 fn pidMatchesName(io: std.Io, pid: u32, name: []const u8, inaccessible: *usize) bool {
@@ -257,7 +258,8 @@ fn nameMatches(candidate: []const u8, name: []const u8) bool {
     return false;
 }
 
-fn collectMatchesWindows(name: []const u8, out: []u32, count: *usize) !void {
+fn collectMatchesWindows(allocator: std.mem.Allocator, name: []const u8) ![]u32 {
+    var matches: std.ArrayList(u32) = .empty;
     const windows = std.os.windows;
 
     const TH32CS_SNAPPROCESS: windows.DWORD = 0x00000002;
@@ -301,7 +303,7 @@ fn collectMatchesWindows(name: []const u8, out: []u32, count: *usize) !void {
         .library_name = "kernel32",
     });
 
-    if (Process32FirstW(snapshot, &entry) == .FALSE) return;
+    if (Process32FirstW(snapshot, &entry) == .FALSE) return matches.items;
 
     while (true) {
         if (entry.th32ProcessID == self_pid) {
@@ -320,13 +322,12 @@ fn collectMatchesWindows(name: []const u8, out: []u32, count: *usize) !void {
             exe_name;
 
         if (std.ascii.eqlIgnoreCase(stem, name) or std.ascii.eqlIgnoreCase(exe_name, name)) {
-            if (count.* >= out.len) return;
-            out[count.*] = entry.th32ProcessID;
-            count.* += 1;
+            try matches.append(allocator, entry.th32ProcessID);
         }
 
         if (Process32NextW(snapshot, &entry) == .FALSE) break;
     }
+    return matches.items;
 }
 
 fn isDotNetProcess(io: std.Io, allocator: std.mem.Allocator, pid: u32, inaccessible: *usize) !bool {
