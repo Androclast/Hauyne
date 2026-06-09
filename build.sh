@@ -11,11 +11,8 @@ set -euo pipefail
 
 cd "$(dirname "$(readlink -f "$0")")"
 
-REPO_ROOT="$PWD"
-BOOTSTRAP_DIR="$REPO_ROOT/Hauyne.Bootstrap"
-INJECTOR_DIR="$REPO_ROOT/Hauyne.Injector"
-PAYLOAD_CSPROJ="$REPO_ROOT/Hauyne.Payload/Hauyne.Payload.csproj"
-BIN_DIR="$REPO_ROOT/bin"
+BIN_DIR="$PWD/bin"
+PAYLOAD_CSPROJ="$PWD/Hauyne.Payload/Hauyne.Payload.csproj"
 
 CONFIG="${CONFIG:-Release}"
 OPTIMIZE="${OPTIMIZE:-ReleaseFast}"
@@ -75,27 +72,13 @@ injector_artifact_for() {
 }
 
 build_zig() {
-    mkdir -p "$BIN_DIR"
-    rm -f "$BIN_DIR/libHauyne.Bootstrap.so" "$BIN_DIR/Hauyne.Bootstrap.dll"
-    rm -f "$BIN_DIR/Hauyne.Injector" "$BIN_DIR/Hauyne.Injector.exe"
-
     for target in "${ZIG_TARGETS[@]}"; do
-        echo "==> zig bootstrap $target ($OPTIMIZE)"
-        ( cd "$BOOTSTRAP_DIR" && zig build -Dtarget="$target" -Doptimize="$OPTIMIZE" )
-
-        echo "==> zig injector $target ($INJECTOR_OPTIMIZE)"
-        ( cd "$INJECTOR_DIR" && zig build -Dtarget="$target" -Doptimize="$INJECTOR_OPTIMIZE" )
-
-        local dest_dir
-        dest_dir="$BIN_DIR/$target"
-        mkdir -p "$dest_dir"
-
-        local bs_artifact inj_artifact
-        bs_artifact="$(bootstrap_artifact_for "$target")"
-        inj_artifact="$(injector_artifact_for "$target")"
-
-        mv "$BIN_DIR/$bs_artifact"  "$dest_dir/$bs_artifact"
-        mv "$BIN_DIR/$inj_artifact" "$dest_dir/$inj_artifact"
+        echo "==> zig $target (bootstrap=$OPTIMIZE, injector=$INJECTOR_OPTIMIZE)"
+        zig build \
+            -Dtarget="$target" \
+            -Doptimize="$OPTIMIZE" \
+            -Dinjector-optimize="$INJECTOR_OPTIMIZE" \
+            --prefix "$BIN_DIR/$target"
     done
 
     link_canonical() {
@@ -119,9 +102,6 @@ build_dotnet() {
     dotnet build "$PAYLOAD_CSPROJ" -c "$CONFIG" --nologo
 }
 
-# Bootstrap resolves Hauyne.Payload.dll relative to its own .so directory (dladdr),
-# so symlink the payload into each per-target subdir.
-# Multi-target build puts payloads in bin/net9.0/ and bin/net10.0/
 payload() {
     (( DO_ZIG )) || return 0
     local payload=""
