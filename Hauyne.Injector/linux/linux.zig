@@ -114,10 +114,11 @@ pub fn inject(
 
     const victim = try victim_mod.pickVictimThread(io, allocator, tgid);
 
-    const dlopen_addr = try symbols.findSymbolInTarget(io, allocator, tgid, "dlopen");
-    const dlsym_addr = try symbols.findSymbolInTarget(io, allocator, tgid, "dlsym");
-    const pthread_create_addr = try symbols.findSymbolInTarget(io, allocator, tgid, "pthread_create");
-    const pthread_detach_addr = try symbols.findSymbolInTarget(io, allocator, tgid, "pthread_detach");
+    const sym_addrs = try symbols.findSymbolsInTarget(io, allocator, tgid, &.{ "dlopen", "dlsym", "pthread_create", "pthread_detach" });
+    const dlopen_addr = sym_addrs[0];
+    const dlsym_addr = sym_addrs[1];
+    const pthread_create_addr = sym_addrs[2];
+    const pthread_detach_addr = sym_addrs[3];
 
     std.debug.print("[hauyne] victim tid={d} (tgid={d})\n", .{ victim, tgid });
     if (debug) {

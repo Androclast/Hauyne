@@ -16,7 +16,15 @@ const MapsRow = struct {
 const exacts = [_][]const u8{ "libc.so.6", "libpthread.so.0", "libdl.so.2" };
 const prefix = [_][]const u8{"libc.musl-"};
 
-pub fn findSymbolInTarget(io: std.Io, allocator: std.mem.Allocator, pid: i32, symbol: []const u8) !usize {
+pub fn findSymbolsInTarget(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    pid: i32,
+    comptime names: []const []const u8,
+) ![names.len]usize {
+    var results = std.mem.zeroes([names.len]usize);
+    var found: usize = 0;
+
     const maps_path = try std.fmt.allocPrint(allocator, "/proc/{d}/maps", .{pid});
     defer allocator.free(maps_path);
 
@@ -25,6 +33,8 @@ pub fn findSymbolInTarget(io: std.Io, allocator: std.mem.Allocator, pid: i32, sy
 
     var lines = std.mem.splitScalar(u8, maps_text, '\n');
     while (lines.next()) |line| {
+        if (found == names.len) break;
+
         const row = parseMapsRow(line) orelse continue;
         if (!std.mem.eql(u8, row.offset, "00000000")) continue;
         if (!isLibcCandidate(std.fs.path.basename(row.path))) continue;
@@ -32,13 +42,24 @@ pub fn findSymbolInTarget(io: std.Io, allocator: std.mem.Allocator, pid: i32, sy
         const data = readTargetFile(io, allocator, pid, row.path) catch continue;
         defer allocator.free(data);
 
-        const sym_off = lookupDynsym(data, symbol) catch |err| switch (err) {
-            error.SymbolNotFound => continue,
-            else => return err,
-        };
-        return row.start + sym_off;
+        for (0..names.len) |i| {
+            if (results[i] != 0) continue;
+            const sym_off = lookupDynsym(data, names[i]) catch |err| switch (err) {
+                error.SymbolNotFound => continue,
+                else => return err,
+            };
+            results[i] = row.start + sym_off;
+            found += 1;
+        }
     }
-    return error.SymbolNotFound;
+
+    if (found < names.len) return error.SymbolNotFound;
+    return results;
+}
+
+pub fn findSymbolInTarget(io: std.Io, allocator: std.mem.Allocator, pid: i32, comptime symbol: []const u8) !usize {
+    const result = try findSymbolsInTarget(io, allocator, pid, &.{symbol});
+    return result[0];
 }
 
 fn isLibcCandidate(basename: []const u8) bool {
