@@ -20,6 +20,26 @@ const arch = switch (builtin.cpu.arch) {
     else => @compileError("unsupported architecture"),
 };
 
+pub const InputError = error{
+    BootstrapPathTooLong,
+    PayloadTripleTooLong,
+};
+
+pub fn validateInputs(
+    so_path: []const u8,
+    payload_path: ?[]const u8,
+    type_name: ?[]const u8,
+    method_name: ?[]const u8,
+) InputError!void {
+    if (so_path.len + 1 > PayloadOffset - PathOffset) return error.BootstrapPathTooLong;
+
+    const triple_len =
+        (if (payload_path) |pp| pp.len else 0) +
+        (if (type_name) |tn| tn.len else 0) +
+        (if (method_name) |mn| mn.len else 0) + 3;
+    if (triple_len > SymbolOffset - PayloadOffset) return error.PayloadTripleTooLong;
+}
+
 pub fn buildScratchPage(
     so_path: []const u8,
     payload_path: ?[]const u8,

@@ -140,13 +140,7 @@ pub fn inject(
     if (!arch.checkSyscallOpcode(insn))
         return error.InvalidSyscallOpcode;
 
-    if (so_path.len >= shim.PayloadOffset - shim.PathOffset) return error.BootstrapPathTooLong;
-    const triple_budget = shim.SymbolOffset - shim.PayloadOffset;
-    const triple_len =
-        (if (payload_path) |pp| pp.len else 0) +
-        (if (type_name) |tn| tn.len else 0) +
-        (if (method_name) |mn| mn.len else 0) + 3;
-    if (triple_len > triple_budget) return error.PayloadTripleTooLong;
+    try shim.validateInputs(so_path, payload_path, type_name, method_name);
 
     const scratch = try bootstrapMmap(victim, saved);
     if (debug) std.debug.print("[hauyne] scratch=0x{x}\n", .{scratch});
