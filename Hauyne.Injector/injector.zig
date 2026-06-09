@@ -195,7 +195,7 @@ fn collectMatches(io: std.Io, allocator: std.mem.Allocator, name: []const u8, in
 }
 
 fn collectMatchesLinux(io: std.Io, allocator: std.mem.Allocator, name: []const u8, inaccessible: *usize) ![]u32 {
-    var matches = std.ArrayList(u32).init(allocator);
+    var matches: std.ArrayList(u32) = .empty;
     const self_pid: u32 = @intCast(std.posix.system.getpid());
 
     var proc_dir = try std.Io.Dir.openDirAbsolute(io, "/proc", .{ .iterate = true });
@@ -209,7 +209,7 @@ fn collectMatchesLinux(io: std.Io, allocator: std.mem.Allocator, name: []const u
         if (pid == self_pid) continue;
 
         if (pidMatchesName(io, pid, name, inaccessible)) {
-            try matches.append(pid);
+            try matches.append(allocator, pid);
         }
     }
     return matches.items;
@@ -259,7 +259,7 @@ fn nameMatches(candidate: []const u8, name: []const u8) bool {
 }
 
 fn collectMatchesWindows(allocator: std.mem.Allocator, name: []const u8) ![]u32 {
-    var matches = std.ArrayList(u32).init(allocator);
+    var matches: std.ArrayList(u32) = .empty;
     const windows = std.os.windows;
 
     const TH32CS_SNAPPROCESS: windows.DWORD = 0x00000002;
@@ -322,7 +322,7 @@ fn collectMatchesWindows(allocator: std.mem.Allocator, name: []const u8) ![]u32 
             exe_name;
 
         if (std.ascii.eqlIgnoreCase(stem, name) or std.ascii.eqlIgnoreCase(exe_name, name)) {
-            try matches.append(entry.th32ProcessID);
+            try matches.append(allocator, entry.th32ProcessID);
         }
 
         if (Process32NextW(snapshot, &entry) == .FALSE) break;
