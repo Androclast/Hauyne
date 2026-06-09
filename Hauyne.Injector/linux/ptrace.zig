@@ -7,11 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const arch = switch (builtin.cpu.arch) {
-    .x86_64 => @import("arch/x86_64.zig"),
-    .aarch64 => @import("arch/aarch64.zig"),
-    else => @compileError("unsupported architecture"),
-};
+const arch = @import("arch.zig").cpu;
 
 pub const UserRegsStruct = arch.UserRegsStruct;
 

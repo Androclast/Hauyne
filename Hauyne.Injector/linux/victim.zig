@@ -7,11 +7,7 @@
 const std = @import("std");
 const procfs = @import("procfs.zig");
 
-const arch = switch (@import("builtin").cpu.arch) {
-    .x86_64 => @import("arch/x86_64.zig"),
-    .aarch64 => @import("arch/aarch64.zig"),
-    else => @compileError("unsupported architecture"),
-};
+const arch = @import("arch.zig").cpu;
 
 // Falls back to the main thread, but main thread holds EE locks,
 // and will probably just suicide bomb if hijacked

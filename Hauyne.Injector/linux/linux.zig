@@ -12,11 +12,7 @@ const shim = @import("shim.zig");
 const symbols = @import("symbols.zig");
 const victim_mod = @import("victim.zig");
 
-const arch = switch (builtin.cpu.arch) {
-    .x86_64 => @import("arch/x86_64.zig"),
-    .aarch64 => @import("arch/aarch64.zig"),
-    else => @compileError("unsupported architecture"),
-};
+const arch = @import("arch.zig").cpu;
 
 const UserRegsStruct = ptrace_mod.UserRegsStruct;
 

@@ -14,11 +14,7 @@ pub const SymbolOffset: usize = 0x1800; // "hauyne_start\0"             (256)
 pub const VictimShimOff: usize = 0x1900; // pthread_create + pthread_detach (256)
 pub const PayloadShimOff: usize = 0x1A00; // dlopen + dlsym + hauyne_start  (1536)
 
-const arch = switch (builtin.cpu.arch) {
-    .x86_64 => @import("shim/x86_64.zig"),
-    .aarch64 => @import("shim/aarch64.zig"),
-    else => @compileError("unsupported architecture"),
-};
+const arch = @import("arch.zig").emitter;
 
 pub const InputError = error{
     BootstrapPathTooLong,
