@@ -52,13 +52,13 @@ pub fn emit(
     //   41 00 80 D2                    mov x1, #2              ; RTLD_NOW
     //   [imm64 dlopen]                 movz+movk x9, dlopen
     //   20 01 3F D6                    blr x9
-    //   40 02 00 B4                    cbz x0, .done (skip dlsym+call)
+    //   60 02 00 B4                    cbz x0, .done (skip dlsym+call)
     //   E0 03 00 F9                    str x0, [sp]
     //   E0 03 40 F9                    ldr x0, [sp]
     //   [imm64 symbol]                 movz+movk x1, "hauyne_start"
     //   [imm64 dlsym]                  movz+movk x9, dlsym
     //   20 01 3F D6                    blr x9
-    //   C0 00 00 B4                    cbz x0, .done
+    //   E0 00 00 B4                    cbz x0, .done
     //   E9 03 00 AA                    mov x9, x0
     //   [imm64 payload]                movz+movk x0, payload_path   ; may be 0 fallback to null
     //   20 01 3F D6                    blr x9
@@ -74,13 +74,13 @@ pub fn emit(
         page[o] = 0x41; o += 1; page[o] = 0x00; o += 1; page[o] = 0x80; o += 1; page[o] = 0xD2; o += 1;
         writeImm64(page, &o, 9, @intCast(dlopen_addr));
         page[o] = 0x20; o += 1; page[o] = 0x01; o += 1; page[o] = 0x3F; o += 1; page[o] = 0xD6; o += 1;
-        page[o] = 0x40; o += 1; page[o] = 0x02; o += 1; page[o] = 0x00; o += 1; page[o] = 0xB4; o += 1;
+        page[o] = 0x60; o += 1; page[o] = 0x02; o += 1; page[o] = 0x00; o += 1; page[o] = 0xB4; o += 1;
         page[o] = 0xE0; o += 1; page[o] = 0x03; o += 1; page[o] = 0x00; o += 1; page[o] = 0xF9; o += 1;
         page[o] = 0xE0; o += 1; page[o] = 0x03; o += 1; page[o] = 0x40; o += 1; page[o] = 0xF9; o += 1;
         writeImm64(page, &o, 1, symbol_addr);
         writeImm64(page, &o, 9, @intCast(dlsym_addr));
         page[o] = 0x20; o += 1; page[o] = 0x01; o += 1; page[o] = 0x3F; o += 1; page[o] = 0xD6; o += 1;
-        page[o] = 0xC0; o += 1; page[o] = 0x00; o += 1; page[o] = 0x00; o += 1; page[o] = 0xB4; o += 1;
+        page[o] = 0xE0; o += 1; page[o] = 0x00; o += 1; page[o] = 0x00; o += 1; page[o] = 0xB4; o += 1;
         page[o] = 0xE9; o += 1; page[o] = 0x03; o += 1; page[o] = 0x00; o += 1; page[o] = 0xAA; o += 1;
         writeImm64(page, &o, 0, payload_addr);
         page[o] = 0x20; o += 1; page[o] = 0x01; o += 1; page[o] = 0x3F; o += 1; page[o] = 0xD6; o += 1;
