@@ -146,6 +146,8 @@ pub fn inject(
     var page = shim.buildScratchPage(so_path, payload_path, type_name, method_name, dlopen_addr, dlsym_addr, pthread_create_addr, pthread_detach_addr, scratch, self_pid);
     try ptrace_mod.writeMemory(victim, scratch, &page);
 
+    try bootstrapMprotect(victim, saved, scratch + shim.CodePageOff, shim.ScratchSize - shim.CodePageOff, PROT_READ | PROT_EXEC);
+
     try runVictimShim(victim, saved, scratch + shim.VictimShimOff);
 
     try ptrace_mod.setRegs(victim, saved);
@@ -161,7 +163,7 @@ pub fn inject(
 
 fn bootstrapMmap(pid: i32, saved: UserRegsStruct) !usize {
     var regs = saved;
-    arch.setupMmapRegs(&regs, shim.ScratchSize, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS);
+    arch.setupMmapRegs(&regs, shim.ScratchSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS);
 
     try ptrace_mod.setRegs(pid, regs);
     try continueAndWait(pid, ptrace_mod.PTRACE_SYSCALL, "mmap-enter");
@@ -173,6 +175,20 @@ fn bootstrapMmap(pid: i32, saved: UserRegsStruct) !usize {
         return error.MmapInTargetFailed;
 
     return @intCast(ret);
+}
+
+fn bootstrapMprotect(pid: i32, saved: UserRegsStruct, addr: usize, len: usize, prot: u64) !void {
+    var regs = saved;
+    arch.setupMprotectRegs(&regs, @intCast(addr), @intCast(len), prot);
+
+    try ptrace_mod.setRegs(pid, regs);
+    try continueAndWait(pid, ptrace_mod.PTRACE_SYSCALL, "mprotect-enter");
+    try continueAndWait(pid, ptrace_mod.PTRACE_SYSCALL, "mprotect-exit");
+
+    const after = try ptrace_mod.getRegs(pid);
+    const ret: i64 = @bitCast(arch.getSyscallResult(after));
+    if (ret < 0 and ret > -4096)
+        return error.MprotectInTargetFailed;
 }
 
 fn runVictimShim(pid: i32, saved: UserRegsStruct, shim_addr: usize) !void {
