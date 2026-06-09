@@ -336,10 +336,12 @@ fn isDotNetProcess(io: std.Io, allocator: std.mem.Allocator, pid: u32, inaccessi
 }
 
 fn isDotNetProcessLinux(io: std.Io, allocator: std.mem.Allocator, pid: u32, inaccessible: *usize) !bool {
+    _ = io;
     const maps_path = try std.fmt.allocPrint(allocator, "/proc/{}/maps", .{pid});
     defer allocator.free(maps_path);
 
-    const data = std.Io.Dir.cwd().readFileAlloc(io, maps_path, allocator, std.Io.Limit.limited(8 * 1024 * 1024)) catch |err| {
+    const procfs = @import("linux/procfs.zig");
+    const data = procfs.readFileAlloc(allocator, maps_path) catch |err| {
         switch (err) {
             error.AccessDenied, error.PermissionDenied => inaccessible.* += 1,
             else => {},
