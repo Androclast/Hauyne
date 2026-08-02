@@ -94,7 +94,7 @@ pub fn main(init: std.process.Init) u8 {
     };
 
     const payload_ok = if (is_windows) blk: {
-        const windows = @import("windows.zig");
+        const windows = @import("windows/windows.zig");
         break :blk windows.inject(allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name);
     } else if (builtin.os.tag == .linux) blk: {
         const linux = @import("linux/linux.zig");
@@ -140,7 +140,7 @@ fn resolveTarget(io: std.Io, allocator: std.mem.Allocator, spec: []const u8) !u3
     if (std.fmt.parseInt(u32, spec, 10)) |pid| {
         if (!(try isDotNetProcess(io, allocator, pid, &inaccessible))) {
             if (inaccessible > 0) {
-                std.debug.print("Cannot inspect PID {d} — permission denied (try root or ptrace_scope=0)\n", .{pid});
+                std.debug.print("Cannot inspect PID {d}, is ptrace_scope 0?\n", .{pid});
             } else {
                 std.debug.print("PID {d} is not a .NET process (hostfxr not loaded)\n", .{pid});
             }
@@ -153,7 +153,7 @@ fn resolveTarget(io: std.Io, allocator: std.mem.Allocator, spec: []const u8) !u3
 
     if (matches.len == 0) {
         if (inaccessible > 0) {
-            std.debug.print("No process matches '{s}' ({d} process(es) unreadable — try root or ptrace_scope=0)\n", .{ spec, inaccessible });
+            std.debug.print("No process matches '{s}' ({d} process(es) unreadable, are you root, or is ptrace_scope 0?)\n", .{ spec, inaccessible });
         } else {
             std.debug.print("No process matches '{s}'\n", .{spec});
         }
