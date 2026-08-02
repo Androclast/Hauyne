@@ -14,6 +14,7 @@ pub const UserRegsStruct = extern struct {
 };
 
 pub const SYS_mmap: u64 = 222;
+pub const SYS_mprotect: u64 = 226;
 pub const syscall_insn_size: u64 = 0;
 
 pub const idle_syscalls = [_]i64{
@@ -48,6 +49,13 @@ pub fn setupMmapRegs(regs: *UserRegsStruct, scratch_size: u64, prot: u64, flags:
     regs.regs[3] = flags;
     regs.regs[4] = @bitCast(@as(i64, -1));
     regs.regs[5] = 0;
+}
+
+pub fn setupMprotectRegs(regs: *UserRegsStruct, addr: u64, len: u64, prot: u64) void {
+    regs.regs[8] = SYS_mprotect;
+    regs.regs[0] = addr;
+    regs.regs[1] = len;
+    regs.regs[2] = prot;
 }
 
 pub fn setupShimRegs(regs: *UserRegsStruct, shim_addr: usize) void {

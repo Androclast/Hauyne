@@ -6,12 +6,17 @@
 
 const std = @import("std");
 
-pub const ScratchSize: usize = 0x2000; // 8 KiB (two pages)
-pub const PathOffset: usize = 0x40; // bootstrap .so path           (1984)
-pub const PayloadOffset: usize = 0x800; // payload triple, NUL-separated (4096)
-pub const SymbolOffset: usize = 0x1800; // "hauyne_start\0"             (256)
-pub const VictimShimOff: usize = 0x1900; // pthread_create + pthread_detach (256)
-pub const PayloadShimOff: usize = 0x1A00; // dlopen + dlsym + hauyne_start  (1536)
+pub const ScratchSize: usize = 0x2000; // 8 KiB (two 4K pages)
+
+// P1 RW: data region, pthread_handle
+pub const PathOffset: usize = 0x40; //   bootstrap .so path           (1984)
+pub const PayloadOffset: usize = 0x800; //   payload triple, NUL-separated (2048)
+
+// P2 RX: read-only data + executable shims
+pub const CodePageOff: usize = 0x1000; //   page boundary for mprotect
+pub const SymbolOffset: usize = 0x1800; //   "hauyne_start\0"             (256)
+pub const VictimShimOff: usize = 0x1900; //   pthread_create + pthread_detach (256)
+pub const PayloadShimOff: usize = 0x1A00; //   dlopen + dlsym + hauyne_start  (1536)
 
 const arch = @import("arch.zig").emitter;
 

@@ -38,6 +38,8 @@ pub fn main(init: std.process.Init) u8 {
             \\Options:
             \\  --type <name>         Fully qualified type name (default: Hauyne.Payload.Entrypoint, Hauyne.Payload)
             \\  --method <name>       Entry method name (default: Initialize)
+            \\  --wait                Poll until <process-name|pid> appears, then inject
+            \\  --wait-timeout <secs> Give up waiting after this many seconds (default: wait forever)
             \\  -h, --help            Show this help
             \\
         ;
@@ -49,6 +51,8 @@ pub fn main(init: std.process.Init) u8 {
     var payload_path: ?[]const u8 = null;
     var type_name: ?[]const u8 = null;
     var method_name: ?[]const u8 = null;
+    var wait = false;
+    var wait_timeout_s: ?u64 = null;
 
     var i: usize = 2;
     while (i < args.len) : (i += 1) {
@@ -67,6 +71,18 @@ pub fn main(init: std.process.Init) u8 {
                 return 1;
             }
             method_name = args[i];
+        } else if (std.mem.eql(u8, a, "--wait")) {
+            wait = true;
+        } else if (std.mem.eql(u8, a, "--wait-timeout")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("--wait-timeout requires a value\n", .{});
+                return 1;
+            }
+            wait_timeout_s = std.fmt.parseInt(u64, args[i], 10) catch {
+                std.debug.print("--wait-timeout requires a number of seconds\n", .{});
+                return 1;
+            };
         } else if (std.mem.startsWith(u8, a, "--")) {
             std.debug.print("Unknown option: {s}\n", .{a});
             return 1;
@@ -78,7 +94,7 @@ pub fn main(init: std.process.Init) u8 {
         }
     }
 
-    const pid = resolveTarget(io, allocator, process_spec) catch return 1;
+    const pid = if (wait) waitForTarget(io, allocator, process_spec, wait_timeout_s) catch return 1 else resolveTarget(io, allocator, process_spec) catch return 1;
 
     const exe_dir = std.process.executableDirPathAlloc(io, allocator) catch {
         std.debug.print("Failed to resolve exe dir\n", .{});
@@ -134,31 +150,27 @@ fn printLastLogLine(allocator: std.mem.Allocator, bootstrap_path: []const u8) vo
     if (last.len > 0) std.debug.print("  {s}\n", .{last});
 }
 
-fn resolveTarget(io: std.Io, allocator: std.mem.Allocator, spec: []const u8) !u32 {
+const FindResult = union(enum) {
+    found: u32,
+    pid_inaccessible: u32,
+    pid_not_dotnet: u32,
+    no_match: usize,
+    none_dotnet: []u32,
+    ambiguous: []u32,
+};
+
+fn findTarget(io: std.Io, allocator: std.mem.Allocator, spec: []const u8) !FindResult {
     var inaccessible: usize = 0;
 
     if (std.fmt.parseInt(u32, spec, 10)) |pid| {
         if (!(try isDotNetProcess(io, allocator, pid, &inaccessible))) {
-            if (inaccessible > 0) {
-                std.debug.print("Cannot inspect PID {d}, is ptrace_scope 0?\n", .{pid});
-            } else {
-                std.debug.print("PID {d} is not a .NET process (hostfxr not loaded)\n", .{pid});
-            }
-            return error.NoDotNetMatch;
+            return if (inaccessible > 0) .{ .pid_inaccessible = pid } else .{ .pid_not_dotnet = pid };
         }
-        return pid;
+        return .{ .found = pid };
     } else |_| {}
 
     const matches = try collectMatches(io, allocator, spec, &inaccessible);
-
-    if (matches.len == 0) {
-        if (inaccessible > 0) {
-            std.debug.print("No process matches '{s}' ({d} process(es) unreadable, are you root, or is ptrace_scope 0?)\n", .{ spec, inaccessible });
-        } else {
-            std.debug.print("No process matches '{s}'\n", .{spec});
-        }
-        return error.NotFound;
-    }
+    if (matches.len == 0) return .{ .no_match = inaccessible };
 
     var vn: usize = 0;
     for (matches) |pid| {
@@ -168,17 +180,65 @@ fn resolveTarget(io: std.Io, allocator: std.mem.Allocator, spec: []const u8) !u3
         }
     }
 
-    if (vn == 0) {
-        std.debug.print("'{s}' matched {d} process(es) but none loaded hostfxr: ", .{ spec, matches.len });
-        printPidList(matches);
-        return error.NoDotNetMatch;
+    if (vn == 0) return .{ .none_dotnet = matches };
+    if (vn > 1) return .{ .ambiguous = matches[0..vn] };
+    return .{ .found = matches[0] };
+}
+
+fn reportNotFound(spec: []const u8, result: FindResult) void {
+    switch (result) {
+        .found => unreachable,
+        .pid_inaccessible => |pid| std.debug.print("Cannot inspect PID {d}: permission denied (try root or ptrace_scope=0)\n", .{pid}),
+        .pid_not_dotnet => |pid| std.debug.print("PID {d} is not a .NET process (hostfxr not loaded)\n", .{pid}),
+        .no_match => |inaccessible| if (inaccessible > 0)
+            std.debug.print("No process matches '{s}' ({d} process(es) unreadable: try root or ptrace_scope=0)\n", .{ spec, inaccessible })
+        else
+            std.debug.print("No process matches '{s}'\n", .{spec}),
+        .none_dotnet => |pids| {
+            std.debug.print("'{s}' matched {d} process(es) but none loaded hostfxr: ", .{ spec, pids.len });
+            printPidList(pids);
+        },
+        .ambiguous => |pids| {
+            std.debug.print("'{s}' matches {d} .NET processes, pass a PID instead: ", .{ spec, pids.len });
+            printPidList(pids);
+        },
     }
-    if (vn > 1) {
-        std.debug.print("'{s}' matches {d} .NET processes, pass a PID instead: ", .{ spec, vn });
-        printPidList(matches[0..vn]);
-        return error.AmbiguousMatch;
+}
+
+fn resolveTarget(io: std.Io, allocator: std.mem.Allocator, spec: []const u8) !u32 {
+    return switch (try findTarget(io, allocator, spec)) {
+        .found => |pid| pid,
+        else => |result| {
+            reportNotFound(spec, result);
+            return error.TargetNotResolved;
+        },
+    };
+}
+
+fn waitForTarget(io: std.Io, allocator: std.mem.Allocator, spec: []const u8, timeout_s: ?u64) !u32 {
+    println(allocator, "Waiting for '{s}'\n", .{spec});
+
+    const poll = std.Io.Duration.fromMilliseconds(500);
+    var elapsed_ms: u64 = 0;
+    while (true) {
+        if (findTarget(io, allocator, spec)) |result| {
+            if (result == .found) return result.found;
+        } else |_| {}
+
+        if (timeout_s) |limit| {
+            if (elapsed_ms >= limit * 1000) {
+                if (findTarget(io, allocator, spec)) |result| {
+                    if (result == .found) return result.found;
+                    reportNotFound(spec, result);
+                } else |_| {}
+                std.debug.print("Timed out after {d}s waiting for '{s}'\n", .{ limit, spec });
+                return error.NotFound;
+            }
+        }
+
+        try std.Io.sleep(io, poll, .awake);
+        elapsed_ms += 500;
     }
-    return matches[0];
 }
 
 fn printPidList(pids: []const u32) void {
