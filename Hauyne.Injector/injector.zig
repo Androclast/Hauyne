@@ -110,7 +110,7 @@ pub fn main(init: std.process.Init) u8 {
     };
 
     const payload_ok = if (is_windows) blk: {
-        const windows = @import("windows.zig");
+        const windows = @import("windows/windows.zig");
         break :blk windows.inject(allocator, @intCast(pid), bootstrap_path, payload_path, type_name, method_name);
     } else if (builtin.os.tag == .linux) blk: {
         const linux = @import("linux/linux.zig");
